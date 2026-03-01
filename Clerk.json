@@ -1,0 +1,47 @@
+{
+  "name": "RASA_Clerk_Stub",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clerk-log",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "clerk-trigger",
+      "name": "Webhook: Receive Log",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO rasa_public.execution_event (execution_id, role, task_type, status) VALUES (gen_random_uuid(), 'clerk', 'log_ingest', 'complete');",
+        "options": {}
+      },
+      "id": "clerk-db-write",
+      "name": "Write to DB (Deep Capture)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [450, 300],
+      "credentials": { "postgres": { "id": "RASA_CLERK_DB" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { 'status': 'logged', 'role': 'clerk' } }}",
+        "options": {}
+      },
+      "id": "clerk-response",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [650, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Receive Log": { "main": [[{ "node": "Write to DB (Deep Capture)", "type": "main", "index": 0 }]] },
+    "Write to DB (Deep Capture)": { "main": [[{ "node": "Respond Success", "type": "main", "index": 0 }]] }
+  }
+}

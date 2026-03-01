@@ -1,0 +1,45 @@
+{
+  "name": "RASA_Builder_Stub",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "builder-execute",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "builder-trigger",
+      "name": "Webhook: Execute Task",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// RASA-048: Builder Stub (Inactive)\n// Iron Rule: Do not execute until Phase 3.\nreturn [{ json: { status: 'stub_active', message: 'Builder logic pending Phase 3 implementation.' } }];"
+      },
+      "id": "builder-stub-logic",
+      "name": "Stub Logic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "builder-response",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [650, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Execute Task": { "main": [[{ "node": "Stub Logic", "type": "main", "index": 0 }]] },
+    "Stub Logic": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  }
+}

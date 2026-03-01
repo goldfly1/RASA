@@ -1,0 +1,105 @@
+{
+  "name": "RASA_Thinker_Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "thinker-invoke",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "trigger-thinker",
+      "name": "Invoke Thinker",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "current_context"
+      },
+      "id": "get-context",
+      "name": "Get Context (Fabric)",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [400, 300],
+      "credentials": {
+        "redis": {
+          "id": "DUMMY_REDIS_CRED",
+          "name": "RASA Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "TBA_model_id",
+        "options": {
+          "temperature": 0.7
+        }
+      },
+      "id": "llm-think",
+      "name": "Generate Plan (LLM)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAI",
+      "typeVersion": 1,
+      "position": [600, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "RASA_LLM_CREDENTIAL",
+          "name": "RASA LLM Provider (TBA)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// RASA-012: Convergence Logic\nconst input = $input.all();\nconst currentPlan = input[0].json.output;\nconst history = input[0].json.history || [];\n\n// Simple recursion check (Depth Max 10)\nif (history.length >= 10) {\n  return { json: { action: 'STOP', reason: 'MAX_DEPTH_REACHED' } };\n}\n\n// Placeholder for Postgres Convergence Check\n// In production, this node calls DB to compare embeddings\nconst convergenceScore = 0.98; // Mocked high score\n\nif (convergenceScore > 0.95) {\n  return { json: { action: 'STOP', reason: 'CONVERGENCE_MET', plan: currentPlan } };\n} else {\n  return { json: { action: 'RECURSE', reason: 'REFINEMENT_NEEDED', plan: currentPlan } };\n}"
+      },
+      "id": "convergence-logic",
+      "name": "Convergence Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO rasa_public.requirements_sheet (execution_id, task_description, status) VALUES (gen_random_uuid(), '{{ $json.plan.task }}', 'pending_approval');",
+        "options": {}
+      },
+      "id": "create-req-sheet",
+      "name": "Create Requirements Sheet",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1000, 200],
+      "credentials": {
+        "postgres": {
+          "id": "DUMMY_POSTGRES_CRED",
+          "name": "RASA Clerk DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { 'status': 'requirements_generated', 'sheet_id': $json.sheet_id } }}",
+        "options": {}
+      },
+      "id": "respond-thinker",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 200]
+    }
+  ],
+  "connections": {
+    "Invoke Thinker": { "main": [[{ "node": "Get Context (Fabric)", "type": "main", "index": 0 }]] },
+    "Get Context (Fabric)": { "main": [[{ "node": "Generate Plan (LLM)", "type": "main", "index": 0 }]] },
+    "Generate Plan (LLM)": { "main": [[{ "node": "Convergence Check", "type": "main", "index": 0 }]] },
+    "Convergence Check": {
+      "main": [[
+        { "node": "Create Requirements Sheet", "type": "main", "index": 0 }
+      ]]
+    },
+    "Create Requirements Sheet": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  }
+}

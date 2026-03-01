@@ -1,0 +1,100 @@
+{
+  "name": "RASA_Fabric_Active_Registry",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fabric-register",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "fabric-trigger",
+      "name": "Webhook: Register Agent",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "agent_id",
+        "value": "={{ $json.body.id }}",
+        "options": {}
+      },
+      "id": "set-agent-id",
+      "name": "Extract Agent ID",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [450, 300],
+      "credentials": {
+        "redis": {
+          "id": "DUMMY_REDIS_CRED",
+          "name": "RASA Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "agent_status_{{ $json.body.id }}",
+        "value": "active",
+        "options": {}
+      },
+      "id": "set-status-active",
+      "name": "Set Status Active",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "credentials": {
+        "redis": {
+          "id": "DUMMY_REDIS_CRED",
+          "name": "RASA Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO rasa_public.execution_event (execution_id, role, task_type, status) VALUES (gen_random_uuid(), 'fabric', 'agent_registration', 'complete');",
+        "options": {}
+      },
+      "id": "log-registration",
+      "name": "Log Registration",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [850, 300],
+      "credentials": {
+        "postgres": {
+          "id": "DUMMY_POSTGRES_CRED",
+          "name": "RASA Clerk DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { 'status': 'registered', 'agent_id': $json.body.id } }}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Register Agent": {
+      "main": [[{ "node": "Extract Agent ID", "type": "main", "index": 0 }]]
+    },
+    "Extract Agent ID": {
+      "main": [[{ "node": "Set Status Active", "type": "main", "index": 0 }]]
+    },
+    "Set Status Active": {
+      "main": [[{ "node": "Log Registration", "type": "main", "index": 0 }]]
+    },
+    "Log Registration": {
+      "main": [[{ "node": "Respond Success", "type": "main", "index": 0 }]]
+    }
+  }
+}
