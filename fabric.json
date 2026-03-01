@@ -13,44 +13,6 @@
     },
     {
       "parameters": {
-        "operation": "set",
-        "key": "agent_id",
-        "value": "={{ $json.body.id }}",
-        "options": {}
-      },
-      "id": "set-agent-id",
-      "name": "Extract Agent ID",
-      "type": "n8n-nodes-base.redis",
-      "typeVersion": 1,
-      "position": [450, 300],
-      "credentials": {
-        "redis": {
-          "id": "DUMMY_REDIS_CRED",
-          "name": "RASA Redis"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "operation": "set",
-        "key": "agent_status_{{ $json.body.id }}",
-        "value": "active",
-        "options": {}
-      },
-      "id": "set-status-active",
-      "name": "Set Status Active",
-      "type": "n8n-nodes-base.redis",
-      "typeVersion": 1,
-      "position": [650, 300],
-      "credentials": {
-        "redis": {
-          "id": "DUMMY_REDIS_CRED",
-          "name": "RASA Redis"
-        }
-      }
-    },
-    {
-      "parameters": {
         "operation": "executeQuery",
         "query": "INSERT INTO rasa_public.execution_event (execution_id, role, task_type, status) VALUES (gen_random_uuid(), 'fabric', 'agent_registration', 'complete');",
         "options": {}
@@ -59,35 +21,31 @@
       "name": "Log Registration",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [850, 300],
+      "position": [450, 300],
       "credentials": {
         "postgres": {
           "id": "DUMMY_POSTGRES_CRED",
           "name": "RASA Clerk DB"
         }
-      }
+      },
+      "notesInFlow": true,
+      "notes": "RASA-002: Deep Capture.\nLogs the successful registration of agents to Postgres."
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { 'status': 'registered', 'agent_id': $json.body.id } }}",
+        "responseBody": "={{ { 'status': 'registered', 'message': 'Agents received via Genesis' } }}",
         "options": {}
       },
       "id": "respond-webhook",
       "name": "Respond Success",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1050, 300]
+      "position": [650, 300]
     }
   ],
   "connections": {
     "On Registry Request": {
-      "main": [[{ "node": "Extract Agent ID", "type": "main", "index": 0 }]]
-    },
-    "Extract Agent ID": {
-      "main": [[{ "node": "Set Status Active", "type": "main", "index": 0 }]]
-    },
-    "Set Status Active": {
       "main": [[{ "node": "Log Registration", "type": "main", "index": 0 }]]
     },
     "Log Registration": {
