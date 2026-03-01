@@ -2,17 +2,14 @@
   "name": "RASA_Fabric_Active_Registry",
   "nodes": [
     {
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "fabric-register",
-        "responseMode": "responseNode",
-        "options": {}
-      },
+      "parameters": {},
       "id": "fabric-trigger",
-      "name": "Webhook: Register Agent",
-      "type": "n8n-nodes-base.webhook",
+      "name": "On Registry Request",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1,
-      "position": [250, 300]
+      "position": [250, 300],
+      "notesInFlow": true,
+      "notes": "RASA-044: Active Registry Entry Point.\nTriggered by Genesis via 'Execute Workflow' node."
     },
     {
       "parameters": {
@@ -84,7 +81,7 @@
     }
   ],
   "connections": {
-    "Webhook: Register Agent": {
+    "On Registry Request": {
       "main": [[{ "node": "Extract Agent ID", "type": "main", "index": 0 }]]
     },
     "Extract Agent ID": {
