@@ -74,7 +74,7 @@ class SandboxPipeline:
         )
 
         await self._publish_result(result)
-        print(f"[sandbox] pipeline {task_id[:8]} → {'PASS' if result.passed else 'FAIL'} ({result.duration_ms}ms)")
+        print(f"[sandbox] pipeline {task_id[:8]} -> {'PASS' if result.passed else 'FAIL'} ({result.duration_ms}ms)")
 
     async def run_pipeline(
         self, task_id: str, soul_id: str, payload: dict[str, Any]

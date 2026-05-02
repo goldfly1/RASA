@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+import chevron
 import httpx
 import psycopg
 
@@ -50,7 +51,7 @@ def _load_soul(soul_id) -> dict:
 
 
 def _resolve_model(soul, override) -> tuple:
-    default = os.environ.get("RASA_DEFAULT_MODEL", "Deepseek-v4-flash:cloud")
+    default = os.environ.get("RASA_DEFAULT_MODEL", "deepseek-v4-flash:cloud")
     if override:
         model = override
     elif soul.get("model", {}).get("preferred_model"):
@@ -58,7 +59,7 @@ def _resolve_model(soul, override) -> tuple:
     else:
         tier = soul.get("model", {}).get("default_tier", "standard")
         if tier == "premium":
-            model = os.environ.get("RASA_PREMIUM_MODEL", "Deepseek-v4-pro:cloud")
+            model = os.environ.get("RASA_PREMIUM_MODEL", "deepseek-v4-pro:cloud")
         else:
             model = default
     base_url = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
@@ -66,20 +67,6 @@ def _resolve_model(soul, override) -> tuple:
 
 
 def _render_system_prompt(soul, task, memory) -> str:
-    import jinja2
-
-    def hb_to_jinja(text):
-        """Translate Handlebars {{#each path}}...{{this}}...{{/each}} to Jinja2."""
-        import re
-        # Step 1: replace {{#each path}} with {% for item in path %}
-        text = re.sub(r'\{\{#each\s+([\w.]+)\s*\}\}', r'{% for item in \1 %}', text)
-        # Step 2: replace {{this}} inside loops with {{item}}
-        text = text.replace('{{this}}', '{{item}}')
-        # Step 3: replace {{/each}} with {% endfor %}
-        text = re.sub(r'\{\{/each\s*\}\}', '{% endfor %}', text)
-        return text
-
-    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
     ctx = {
         "metadata": soul["metadata"],
         "agent_role": soul["agent_role"],
@@ -89,9 +76,9 @@ def _render_system_prompt(soul, task, memory) -> str:
         "task": task,
         "memory": memory,
     }
-    body = env.from_string(hb_to_jinja(soul["prompt"]["system_template"])).render(ctx)
+    body = chevron.render(soul["prompt"]["system_template"], ctx)
     if "context_injection" in soul["prompt"]:
-        body += "\n\n" + env.from_string(hb_to_jinja(soul["prompt"]["context_injection"])).render(ctx)
+        body += "\n\n" + chevron.render(soul["prompt"]["context_injection"], ctx)
     return body.strip()
 
 
@@ -216,11 +203,6 @@ def main():
     args = parser.parse_args()
 
     soul = _load_soul(args.soul)
-    session_mode = "daemon" if not args.one_shot else "one-shot"
-    configured_mode = soul.get("behavior", {}).get("session", {}).get("mode", "one-shot")
-    if configured_mode == "daemon" and session_mode != "daemon" and not args.dry_run:
-        print(f"[{args.soul}] configured for daemon but --one-shot passed; forcing daemon")
-        args.one_shot = False
 
     if args.one_shot:
         result = asyncio.run(

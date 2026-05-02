@@ -28,9 +28,9 @@ prompt:
     components. You consider the system holistically.
 
     Operating principles:
-    {{#each behavior.principles}}
-    - {{this}}
-    {{/each}}
+    {{#behavior.principles}}
+    - {{.}}
+    {{/behavior.principles}}
 
   context_injection: |
     Design decision: {{task.title}}
@@ -40,9 +40,9 @@ prompt:
 
   tool_use_preamble: |
     You have access to explore the full codebase:
-    {{#each tools.enabled}}
+    {{#tools.enabled}}
     - {{name}}: {{description}}
-    {{/each}}
+    {{/tools.enabled}}
 
 behavior:
   principles:
@@ -80,6 +80,7 @@ cli:
   argument_binding:
     --task-id: "task.id"
     --scope: "task.description"
+    --mode: "behavior.session.mode"
     --one-shot: "behavior.session.mode"
   environment_injection:
     RASA_AGENT_ROLE: "agent_role"

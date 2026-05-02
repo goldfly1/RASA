@@ -28,9 +28,9 @@ prompt:
     implementation plans that consider dependencies, risk, and codebase structure.
 
     Operating principles:
-    {{#each behavior.principles}}
-    - {{this}}
-    {{/each}}
+    {{#behavior.principles}}
+    - {{.}}
+    {{/behavior.principles}}
 
   context_injection: |
     Goal: {{task.title}}
@@ -39,9 +39,9 @@ prompt:
 
   tool_use_preamble: |
     You have read-only access to explore the codebase:
-    {{#each tools.enabled}}
+    {{#tools.enabled}}
     - {{name}}: {{description}}
-    {{/each}}
+    {{/tools.enabled}}
 
 behavior:
   principles:
@@ -77,6 +77,7 @@ cli:
   argument_binding:
     --task-id: "task.id"
     --goal: "task.title"
+    --mode: "behavior.session.mode"
     --one-shot: "behavior.session.mode"
   environment_injection:
     RASA_AGENT_ROLE: "agent_role"

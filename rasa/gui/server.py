@@ -5,14 +5,17 @@ import os
 import sys
 import time
 
+import httpx
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from rasa.gui.chat import list_souls, send_message, reset_conversation
 from rasa.gui.health import HealthChecker
 from rasa.gui.process import AlreadyRunningError, NotRunningError, ProcessManager
 from rasa.gui.registry import build_registry, get_service_map
+from rasa.orchestrator.runtime import OrchestratorRuntime
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -194,6 +197,110 @@ async def about_info(request):
     })
 
 
+# ── Chat ──
+
+
+async def chat_send(request):
+    body = await request.json()
+    soul = body.get("soul", "coder-v2-dev")
+    message = body.get("message", "").strip()
+    if not message:
+        return JSONResponse({"error": "Message is required"}, status_code=400)
+    try:
+        result = await send_message(soul, message)
+        return JSONResponse(result)
+    except FileNotFoundError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except httpx.HTTPStatusError as e:
+        return JSONResponse({"error": f"LLM call failed: {e.response.status_code}"}, status_code=502)
+    except httpx.TimeoutException:
+        return JSONResponse({"error": "LLM call timed out. The model took too long to respond. Try resetting the conversation and sending a simpler message."}, status_code=504)
+    except Exception as e:
+        print(f"ERROR in chat_send: {type(e).__name__}: {e}", flush=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def chat_reset(request):
+    body = await request.json()
+    soul = body.get("soul", "coder-v2-dev")
+    reset_conversation(soul)
+    return JSONResponse({"status": "reset"})
+
+
+async def chat_souls(request):
+    return JSONResponse({"souls": list_souls()})
+
+
+# ── Orchestrator ──
+
+_orchestrator: OrchestratorRuntime | None = None
+
+
+def _get_orchestrator() -> OrchestratorRuntime:
+    global _orchestrator
+    if _orchestrator is None:
+        _orchestrator = OrchestratorRuntime()
+    return _orchestrator
+
+
+async def orchestrator_send(request):
+    body = await request.json()
+    message = body.get("message", "").strip()
+    if not message:
+        return JSONResponse({"error": "Message is required"}, status_code=400)
+    project_id = body.get("project_id")
+    mode = body.get("mode")
+
+    orch = _get_orchestrator()
+    if project_id:
+        orch.set_project(project_id)
+    if mode:
+        orch.set_mode(mode)
+
+    try:
+        result = await orch.send_message(message)
+        return JSONResponse(result)
+    except Exception as e:
+        print(f"ERROR in orchestrator_send: {type(e).__name__}: {e}", flush=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def orchestrator_reset(request):
+    _get_orchestrator().reset()
+    return JSONResponse({"status": "reset"})
+
+
+async def orchestrator_tasks(request):
+    orch = _get_orchestrator()
+    pid = request.query_params.get("project_id") or orch.project_id
+    if not pid:
+        return JSONResponse({"tasks": []})
+    from rasa.orchestrator.delegator import TaskDelegator
+    delegator = TaskDelegator()
+    tasks = delegator.list_project_tasks(pid)
+    return JSONResponse({"tasks": tasks})
+
+
+async def orchestrator_projects(request):
+    from rasa.orchestrator.project import ProjectManager
+    pm = ProjectManager()
+    projects = pm.list_projects()
+    return JSONResponse({"projects": projects})
+
+
+async def orchestrator_create_project(request):
+    body = await request.json()
+    name = body.get("name", "").strip()
+    if not name:
+        return JSONResponse({"error": "Project name is required"}, status_code=400)
+    goal = body.get("goal", "")
+    description = body.get("description", "")
+    from rasa.orchestrator.project import ProjectManager
+    pm = ProjectManager()
+    project = pm.create_project(name, goal, description)
+    return JSONResponse({"project": project})
+
+
 # ── App ──
 
 from contextlib import asynccontextmanager
@@ -217,6 +324,14 @@ routes = [
     Route("/api/services/{id}/stop", stop_service, methods=["POST"]),
     Route("/api/slash-commands", list_slash_commands),
     Route("/api/about", about_info),
+    Route("/api/chat/send", chat_send, methods=["POST"]),
+    Route("/api/chat/reset", chat_reset, methods=["POST"]),
+    Route("/api/chat/souls", chat_souls),
+    Route("/api/orchestrator/send", orchestrator_send, methods=["POST"]),
+    Route("/api/orchestrator/reset", orchestrator_reset, methods=["POST"]),
+    Route("/api/orchestrator/tasks", orchestrator_tasks),
+    Route("/api/orchestrator/projects", orchestrator_projects),
+    Route("/api/orchestrator/projects", orchestrator_create_project, methods=["POST"]),
 ]
 
 # Only mount static if the directory exists and has an index.html

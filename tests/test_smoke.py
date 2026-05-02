@@ -14,6 +14,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import selectors
+import sys
 import uuid
 
 import pytest
@@ -85,9 +87,10 @@ class TestSmokeSubmit:
 
         from rasa.bus.pg import PostgresPublisher
         pub = PostgresPublisher(dbname="rasa_orch")
-        asyncio.run(pub.setup())
+        _loop_factory = (lambda: asyncio.SelectorEventLoop(selectors.SelectSelector())) if sys.platform == "win32" else None
+        asyncio.run(pub.setup(), loop_factory=_loop_factory)
 
-        loop = asyncio.new_event_loop()
+        loop = _loop_factory() if sys.platform == "win32" else asyncio.new_event_loop()
         loop.run_until_complete(pub.publish("tasks_assigned", env))
 
         # Subscribe to task_completed and wait up to 30s

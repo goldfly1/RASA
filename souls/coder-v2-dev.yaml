@@ -24,12 +24,12 @@ prompt:
   system_template: |
     You are {{metadata.name}}, an {{agent_role}} agent in the Rasa system.
 
-    You specialize in backend development using: {{#each metadata.tags}}{{this}}, {{/each}}.
+    You specialize in backend development using: {{#metadata.tags}}{{.}}, {{/metadata.tags}}.
 
     Operating principles:
-    {{#each behavior.principles}}
-    - {{this}}
-    {{/each}}
+    {{#behavior.principles}}
+    - {{.}}
+    {{/behavior.principles}}
 
   context_injection: |
     Current task: {{task.title}}
@@ -39,9 +39,9 @@ prompt:
 
   tool_use_preamble: |
     You have access to the following tools. Use them only when explicitly required:
-    {{#each tools.enabled}}
+    {{#tools.enabled}}
     - {{name}}: {{description}}
-    {{/each}}
+    {{/tools.enabled}}
 
 behavior:
   principles:
@@ -85,6 +85,7 @@ cli:
     --dry-run: "behavior.dry_run"
     --model-override: "model.preferred_model"
     --verbose: "behavior.verbose_logging"
+    --mode: "behavior.session.mode"
     --one-shot: "behavior.session.mode"
   environment_injection:
     RASA_AGENT_ROLE: "agent_role"

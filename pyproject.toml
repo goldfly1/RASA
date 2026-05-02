@@ -36,6 +36,9 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["rasa"]
 
+[project.scripts]
+rasa-agent = "rasa.agent.dispatcher:main"
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"

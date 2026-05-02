@@ -96,7 +96,7 @@ func (c *PoolController) HandleTaskAssigned(env *bus.Envelope) {
 
 	// Pick random agent (simple pilot routing)
 	chosen := agents[rand.Intn(len(agents))]
-	log.Printf("pool-controller: routing task %s → agent %s (soul=%s)", taskID, chosen, soulID)
+	log.Printf("pool-controller: routing task %s -> agent %s (soul=%s)", taskID, chosen, soulID)
 
 	_, err := c.orchDB.ExecContext(c.ctx,
 		`UPDATE tasks SET status = 'ASSIGNED', assigned_agent_id = $1, assigned_at = NOW() WHERE id = $2`,

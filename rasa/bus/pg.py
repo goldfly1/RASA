@@ -56,7 +56,7 @@ class PostgresPublisher:
                     "INSERT INTO bus_messages (channel, envelope) VALUES (%s, %s)",
                     (channel, json.dumps(json.loads(env_json))),
                 )
-                await conn.execute(f"NOTIFY {channel}, %s", (msg.message_id,))
+                await conn.execute(f"NOTIFY {channel}")
 
 
 class PostgresSubscriber:

@@ -69,10 +69,9 @@ func (p *PGPub) Publish(ctx context.Context, channel string, msg *Envelope) erro
 		return fmt.Errorf("pg publish: insert: %w", err)
 	}
 
-	// NOTIFY payload is the message ID for idempotency.
+	// NOTIFY wakes up the subscriber; payload is unused by fetchAndMark.
 	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf("NOTIFY %s, $1", safeIdent(channel)),
-		msg.MessageID,
+		fmt.Sprintf("NOTIFY %s", safeIdent(channel)),
 	); err != nil {
 		return fmt.Errorf("pg publish: notify: %w", err)
 	}
