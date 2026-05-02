@@ -116,6 +116,47 @@ set PGPASSWORD=8764  # then psql works without prompt
 - **6 PostgreSQL databases**: `rasa_orch`, `rasa_pool`, `rasa_policy`, `rasa_memory`, `rasa_eval`, `rasa_recovery`.
 - **Capability Registry**: DB-backed `agent_capabilities` table. Agents register their capabilities, the orchestrator queries them. Migration `100_rasa_capabilities.sql`.
 
+## Agent Delegation
+
+When work requires a specialist agent, there are two paths:
+
+### 1. Claude Code Agent tool (complex/creative work)
+
+Use the `Agent` tool to spawn a specialist Claude Code sub-agent. This gives the sub-agent full file I/O, git, shell access — the same capabilities as the orchestrator.
+
+```
+Agent(description="Task summary", prompt="Detailed instructions", subagent_type="general-purpose")
+```
+
+Best for: code generation, debugging, research, file operations, anything requiring real judgment.
+
+### 2. TaskDelegator + pool controller (automated Python agents)
+
+Create a task record in `rasa_orch.tasks` for audit trail, then let the pool controller spawn a Python agent subprocess to execute it:
+
+```python
+from rasa.orchestrator.delegator import TaskDelegator
+d = TaskDelegator()
+tid = d.create_task(soul_id="coder-v2-dev", title="Fix DB migration", description="...")
+d.assign_task(tid)  # marks ASSIGNED + PG NOTIFY → pool controller picks it up
+```
+
+Best for: well-defined automated tasks, batch processing, operations that don't need Claude Code's full toolset.
+
+The pool controller (`rasa/pool/controller.py`) listens for `tasks_assigned` notifications and spawns `rasa.agent.dispatcher` subprocesses.
+
+### DB task queries from Claude Code
+
+```bash
+# Direct psql
+PGPASSWORD=8764 psql -U postgres -d rasa_orch -c "SELECT id, title, status, soul_id FROM tasks ORDER BY created_at DESC LIMIT 10;"
+
+# Via Python API
+python -c "from rasa.orchestrator.delegator import TaskDelegator; import json; d=TaskDelegator(); print(json.dumps(d.list_project_tasks(), indent=2))"
+```
+
+Task state machine: `PENDING → ASSIGNED → RUNNING → CHECKPOINTED/COMPLETED/FAILED`.
+
 ## Known Pitfalls
 
 1. The legacy dispatcher's Handlebars→Jinja2 regex translation is lossy. New code should use `runtime.py` with chevron.
