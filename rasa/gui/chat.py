@@ -199,6 +199,56 @@ def _get_tool_defs(soul: dict) -> list[dict]:
     return [TOOL_DEFS[t] for t in allowed if t in TOOL_DEFS]
 
 
+async def _llm_call(base_url: str, api_key: str, payload: dict) -> dict:
+    """Call the LLM API with retry logic for transient errors."""
+    max_retries = 3
+    last_error: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(180)) as c:
+                r = await c.post(
+                    f"{base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                if r.status_code in (429, 502, 503):
+                    wait = 2 ** attempt
+                    print(f"LLM transient error {r.status_code}, retrying in {wait}s "
+                          f"(attempt {attempt + 1}/{max_retries})", flush=True)
+                    await asyncio.sleep(wait)
+                    continue
+                r.raise_for_status()
+                return r.json()
+        except httpx.TimeoutException:
+            if attempt < max_retries - 1:
+                wait = 2 ** attempt
+                print(f"LLM timeout, retrying in {wait}s "
+                      f"(attempt {attempt + 1}/{max_retries})", flush=True)
+                await asyncio.sleep(wait)
+                continue
+            raise
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (429, 502, 503) and attempt < max_retries - 1:
+                wait = 2 ** attempt
+                print(f"LLM {e.response.status_code}, retrying in {wait}s "
+                      f"(attempt {attempt + 1}/{max_retries})", flush=True)
+                await asyncio.sleep(wait)
+                continue
+            raise
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                wait = 2 ** attempt
+                print(f"LLM error: {e}, retrying in {wait}s "
+                      f"(attempt {attempt + 1}/{max_retries})", flush=True)
+                await asyncio.sleep(wait)
+                continue
+    raise RuntimeError(f"LLM call failed after {max_retries} retries: {last_error}")
+
+
 # ── Soul / model helpers ──
 
 def _load_soul(soul_id: str) -> dict:
@@ -324,17 +374,7 @@ async def send_message(soul_id: str, text: str) -> dict:
             if tool_defs:
                 payload["tools"] = tool_defs
 
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120)) as c:
-                r = await c.post(
-                    f"{base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-                r.raise_for_status()
-                data = r.json()
+            data = await _llm_call(base_url, api_key, payload)
 
             choice = data["choices"][0]
             msg = choice["message"]
