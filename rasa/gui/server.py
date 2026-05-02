@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import time
+import uuid
+from pathlib import Path
 
 import httpx
 from starlette.applications import Starlette
@@ -16,6 +19,12 @@ from rasa.gui.health import HealthChecker
 from rasa.gui.process import AlreadyRunningError, NotRunningError, ProcessManager
 from rasa.gui.registry import build_registry, get_service_map
 from rasa.orchestrator.runtime import OrchestratorRuntime
+
+# ── Claude Code relay directories ──
+
+RELAY_DIR = Path(__file__).parent.parent.parent / ".orch_relay"
+INBOX_DIR = RELAY_DIR / "inbox"
+OUTBOX_DIR = RELAY_DIR / "outbox"
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -251,18 +260,35 @@ async def orchestrator_send(request):
     project_id = body.get("project_id")
     mode = body.get("mode")
 
-    orch = _get_orchestrator()
-    if project_id:
-        orch.set_project(project_id)
-    if mode:
-        orch.set_mode(mode)
+    # Write message to Claude Code relay inbox
+    ticket_id = str(uuid.uuid4())
+    INBOX_DIR.mkdir(parents=True, exist_ok=True)
+    OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
 
-    try:
-        result = await orch.send_message(message)
-        return JSONResponse(result)
-    except Exception as e:
-        print(f"ERROR in orchestrator_send: {type(e).__name__}: {e}", flush=True)
-        return JSONResponse({"error": str(e)}, status_code=500)
+    msg = {
+        "ticket_id": ticket_id,
+        "message": message,
+        "project_id": project_id,
+        "mode": mode,
+        "timestamp": time.time(),
+    }
+    (INBOX_DIR / f"{ticket_id}.json").write_text(json.dumps(msg, indent=2))
+
+    # Poll for response (up to 300s)
+    ticket_path = OUTBOX_DIR / f"{ticket_id}.json"
+    deadline = time.time() + 300
+    while time.time() < deadline:
+        if ticket_path.exists():
+            response = json.loads(ticket_path.read_text())
+            ticket_path.unlink(missing_ok=True)
+            return JSONResponse(response)
+        await asyncio.sleep(0.5)
+
+    return JSONResponse(
+        {"error": "Orchestrator did not respond within 300s. "
+                   "Is the orchestrator (Claude Code) running and monitoring .orch_relay/inbox/?"},
+        status_code=504,
+    )
 
 
 async def orchestrator_reset(request):
@@ -331,14 +357,36 @@ async def orchestrator_register_capability(request):
 from contextlib import asynccontextmanager
 
 
+_relay_cleanup_task: asyncio.Task | None = None
+
+
+async def _relay_cleanup_loop():
+    """Remove stale relay files older than 1 hour."""
+    while True:
+        now = time.time()
+        for d in (INBOX_DIR, OUTBOX_DIR):
+            if not d.exists():
+                continue
+            for p in d.glob("*.json"):
+                try:
+                    if now - p.stat().st_mtime > 3600:
+                        p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        await asyncio.sleep(600)  # every 10 minutes
+
+
 @asynccontextmanager
 async def lifespan(app):
     await health_checker.start()
-    global _health_task
+    global _health_task, _relay_cleanup_task
     _health_task = asyncio.create_task(_health_loop())
+    _relay_cleanup_task = asyncio.create_task(_relay_cleanup_loop())
     yield
     if _health_task:
         _health_task.cancel()
+    if _relay_cleanup_task:
+        _relay_cleanup_task.cancel()
     await process_manager.stop_all()
     await health_checker.stop()
 

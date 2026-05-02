@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tic Tac Toe — Unbeatable</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0d1117; color: #e6edf3;
+    display: flex; justify-content: center; align-items: center;
+    min-height: 100vh; margin: 0;
+  }
+  .game {
+    text-align: center;
+    padding: 2rem;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  .status {
+    font-size: 1.1rem; margin-bottom: 1rem; min-height: 1.6rem;
+    color: #8b949e;
+  }
+  .board {
+    display: grid; grid-template-columns: repeat(3, 100px);
+    gap: 4px; justify-content: center;
+  }
+  .cell {
+    width: 100px; height: 100px;
+    background: #161b22; border: 1px solid #30363d;
+    font-size: 2.5rem; font-weight: bold;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: background 0.15s;
+    color: #e6edf3;
+  }
+  .cell:hover { background: #1c2333; }
+  .cell.win { background: #1a3a2a; color: #22c55e; }
+  .cell.taken { cursor: not-allowed; }
+  .reset {
+    margin-top: 1.5rem; padding: 0.6rem 2rem;
+    background: #238636; color: #fff; border: none;
+    border-radius: 6px; font-size: 1rem; cursor: pointer;
+  }
+  .reset:hover { background: #2ea043; }
+  .message { margin-top: 1rem; font-size: 0.9rem; color: #8b949e; }
+</style>
+</head>
+<body>
+<div class="game">
+  <h1>Tic Tac Toe</h1>
+  <div class="status" id="status">You are X — Computer is O</div>
+  <div class="board" id="board"></div>
+  <button class="reset" id="reset">New Game</button>
+  <div class="message">Computer uses minimax — it never loses</div>
+</div>
+<script>
+const EMPTY = '';
+const HUMAN = 'X';
+const AI = 'O';
+
+let board = Array(9).fill(EMPTY);
+let gameOver = false;
+let statusEl = document.getElementById('status');
+let boardEl = document.getElementById('board');
+
+function render() {
+  boardEl.innerHTML = '';
+  for (let i = 0; i < 9; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'cell' + (board[i] ? ' taken' : '');
+    cell.textContent = board[i];
+    cell.dataset.idx = i;
+    if (!board[i] && !gameOver) cell.addEventListener('click', () => humanMove(i));
+    boardEl.appendChild(cell);
+  }
+}
+
+function getWinner(board) {
+  const lines = [
+    [0,1,2],[3,4,5],[6,7,8],
+    [0,3,6],[1,4,7],[2,5,8],
+    [0,4,8],[2,4,6],
+  ];
+  for (const [a,b,c] of lines) {
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) return {winner: board[a], line: [a,b,c]};
+  }
+  if (board.every(c => c !== EMPTY)) return {winner: 'draw', line: []};
+  return null;
+}
+
+function highlight(line) {
+  document.querySelectorAll('.cell').forEach((el, i) => {
+    if (line.includes(i)) el.classList.add('win');
+  });
+}
+
+function humanMove(idx) {
+  if (board[idx] || gameOver) return;
+  board[idx] = HUMAN;
+  const result = getWinner(board);
+  if (result) { endGame(result); return; }
+  render();
+  statusEl.textContent = 'Computer thinking...';
+  // Slight delay so the UI updates before AI moves
+  setTimeout(aiMove, 100);
+}
+
+function aiMove() {
+  if (gameOver) return;
+  const idx = minimax(board, AI).idx;
+  board[idx] = AI;
+  const result = getWinner(board);
+  render();
+  if (result) { endGame(result); return; }
+  statusEl.textContent = 'Your turn (X)';
+}
+
+function endGame(result) {
+  gameOver = true;
+  if (result.winner === 'draw') {
+    statusEl.textContent = "It's a draw!";
+  } else if (result.winner === AI) {
+    statusEl.textContent = 'Computer wins!';
+    highlight(result.line);
+  } else {
+    statusEl.textContent = 'You win! (How?!)';
+    highlight(result.line);
+  }
+  render();
+}
+
+function minimax(b, player) {
+  const result = getWinner(b);
+  if (result) {
+    if (result.winner === AI) return {score: 10};
+    if (result.winner === HUMAN) return {score: -10};
+    return {score: 0};
+  }
+  const moves = b.map((v, i) => v === EMPTY ? i : -1).filter(i => i >= 0);
+  let best = {score: player === AI ? -Infinity : Infinity};
+  for (const i of moves) {
+    b[i] = player;
+    const sim = minimax(b, player === AI ? HUMAN : AI);
+    b[i] = EMPTY;
+    sim.idx = i;
+    if (player === AI ? sim.score > best.score : sim.score < best.score) best = sim;
+  }
+  return best;
+}
+
+function reset() {
+  board = Array(9).fill(EMPTY);
+  gameOver = false;
+  statusEl.textContent = 'Your turn (X)';
+  render();
+}
+
+document.getElementById('reset').addEventListener('click', reset);
+render();
+</script>
+</body>
+</html>
