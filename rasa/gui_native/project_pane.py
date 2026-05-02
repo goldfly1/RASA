@@ -115,7 +115,7 @@ class ProjectPane(ttk.Frame):
     # ── Project list ──
 
     def _refresh_projects(self):
-        api_client.fetch_projects(self._on_projects)
+        api_client.fetch_projects(lambda r: self.after(0, self._on_projects, r))
 
     def _on_projects(self, projects: list[dict]):
         self._projects = projects
@@ -144,7 +144,7 @@ class ProjectPane(ttk.Frame):
 
     def _refresh_tasks(self):
         if self._current_project_id:
-            api_client.fetch_tasks(self._current_project_id, self._on_tasks)
+            api_client.fetch_tasks(self._current_project_id, lambda r: self.after(0, self._on_tasks, r))
 
     def _on_tasks(self, tasks: list[dict]):
         self._tasks = tasks
@@ -254,7 +254,7 @@ class ProjectPane(ttk.Frame):
             if not name:
                 messagebox.showwarning("Validation", "Project name is required.", parent=dialog)
                 return
-            api_client.create_project(name, goal, on_done=lambda r: self._on_created(r, dialog))
+            api_client.create_project(name, goal, on_done=lambda r: self.after(0, self._on_created, r, dialog))
 
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=(8, 0))
         ttk.Button(btn_frame, text="Create", command=_do_create).pack(side=tk.RIGHT)

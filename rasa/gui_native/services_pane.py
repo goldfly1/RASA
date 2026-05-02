@@ -81,7 +81,7 @@ class ServicesPane(ttk.Frame):
         self._tree.bind("<ButtonRelease-1>", self._on_click)
 
     def _refresh(self):
-        api_client.fetch_services(self._on_services)
+        api_client.fetch_services(lambda r: self.after(0, self._on_services, r))
         if self._after_id:
             self.after_cancel(self._after_id)
         self._after_id = self.after(5000, self._refresh)
@@ -193,9 +193,9 @@ class ServicesPane(ttk.Frame):
             return
 
         if action == "Start":
-            api_client.start_service(svc_id, on_done=self._refresh)
+            api_client.start_service(svc_id, on_done=lambda r: self.after(0, self._refresh))
         else:
-            api_client.stop_service(svc_id, on_done=self._refresh)
+            api_client.stop_service(svc_id, on_done=lambda r: self.after(0, self._refresh))
 
     def destroy(self):
         if self._after_id:

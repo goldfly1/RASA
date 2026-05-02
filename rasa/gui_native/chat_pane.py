@@ -150,7 +150,7 @@ class ChatPane(ttk.Frame):
             message=text,
             project_id=self._project_id,
             mode=self.get_mode(),
-            on_done=self._on_response,
+            on_done=lambda r: self.after(0, self._on_response, r),
         )
 
     def _on_response(self, result: dict) -> None:
