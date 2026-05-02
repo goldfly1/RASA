@@ -133,3 +133,33 @@ def start_service(service_id: str, on_done: Callable[[dict], None] | None = None
 def stop_service(service_id: str, on_done: Callable[[dict], None] | None = None) -> None:
     """Stop a service by ID."""
     _run_async(_post_async(f"/api/services/{service_id}/stop", {}), on_done)
+
+
+def fetch_capabilities(on_done: Callable[[list], None]) -> None:
+    """Fetch all agent capabilities from the registry."""
+    def _wrap(result):
+        if isinstance(result, dict) and "error" in result:
+            on_done([])
+        else:
+            on_done(result.get("capabilities", []))
+    _run_async(_get_async("/api/orchestrator/capabilities"), _wrap)
+
+
+def register_capability(
+    soul_id: str,
+    agent_role: str,
+    display_name: str,
+    description: str,
+    capabilities: list | None = None,
+    access_level: str = "read-only",
+    on_done: Callable[[dict], None] | None = None,
+) -> None:
+    """Register or update an agent's capabilities in the registry."""
+    _run_async(_post_async("/api/orchestrator/capabilities", {
+        "soul_id": soul_id,
+        "agent_role": agent_role,
+        "display_name": display_name,
+        "description": description,
+        "capabilities": capabilities or [],
+        "access_level": access_level,
+    }), on_done)

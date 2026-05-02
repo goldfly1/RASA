@@ -301,6 +301,31 @@ async def orchestrator_create_project(request):
     return JSONResponse({"project": project})
 
 
+async def orchestrator_capabilities(request):
+    from rasa.orchestrator.capabilities import CapabilityRegistry
+    cr = CapabilityRegistry()
+    caps = cr.list_capabilities()
+    return JSONResponse({"capabilities": caps})
+
+
+async def orchestrator_register_capability(request):
+    body = await request.json()
+    soul_id = body.get("soul_id", "").strip()
+    if not soul_id:
+        return JSONResponse({"error": "soul_id is required"}, status_code=400)
+    from rasa.orchestrator.capabilities import CapabilityRegistry
+    cr = CapabilityRegistry()
+    cap = cr.register_capability(
+        soul_id=soul_id,
+        agent_role=body.get("agent_role", ""),
+        display_name=body.get("display_name", ""),
+        description=body.get("description", ""),
+        capabilities=body.get("capabilities"),
+        access_level=body.get("access_level", "read-only"),
+    )
+    return JSONResponse({"capability": cap})
+
+
 # ── App ──
 
 from contextlib import asynccontextmanager
@@ -332,6 +357,8 @@ routes = [
     Route("/api/orchestrator/tasks", orchestrator_tasks),
     Route("/api/orchestrator/projects", orchestrator_projects),
     Route("/api/orchestrator/projects", orchestrator_create_project, methods=["POST"]),
+    Route("/api/orchestrator/capabilities", orchestrator_capabilities),
+    Route("/api/orchestrator/capabilities", orchestrator_register_capability, methods=["POST"]),
 ]
 
 # Only mount static if the directory exists and has an index.html

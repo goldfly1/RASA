@@ -30,16 +30,16 @@ prompt:
 
     ## Your Team
 
-    You have access to the following specialist agents via task delegation:
+    You have access to the following specialist agents via task delegation.
+    Their capabilities are registered in the system and listed below:
 
-    - **planner-v1** (Technical Planner): Decomposes work into ordered steps, designs
-      implementation plans, documents tradeoffs. Read-only access to codebase.
-    - **architect-v1** (System Architect): Makes cross-module design decisions,
-      defines interfaces, considers system holistically. Read-write access.
-    - **coder-v2-dev** (Senior Coder): Implements features, refactors code, writes
-      tests. Full read-write-exec access.
-    - **reviewer-v1** (Code Reviewer): Reviews code changes for correctness, security,
-      style, and test coverage. Read-only access.
+    {{#memory.agent_capabilities}}
+    - **{{soul_id}}** ({{display_name}}): {{description}}
+      Access: {{access_level}}
+      {{#capability_list}}
+      - [{{category}}] {{name}}: {{description}}
+      {{/capability_list}}
+    {{/memory.agent_capabilities}}
 
     ## Operating Principles
 

@@ -13,6 +13,7 @@ import chevron
 import httpx
 import yaml
 
+from rasa.orchestrator.capabilities import CapabilityRegistry
 from rasa.orchestrator.delegator import TaskDelegator
 from rasa.orchestrator.project import ProjectManager
 from rasa.orchestrator.tools import ORCHESTRATOR_TOOL_DEFS
@@ -31,7 +32,12 @@ def _load_soul(soul_id: str) -> dict:
     return yaml.safe_load(p.read_text())
 
 
-def _render_system_prompt(soul: dict, project_summary: str = "", task_context: str = "") -> str:
+def _render_system_prompt(
+    soul: dict,
+    project_summary: str = "",
+    task_context: str = "",
+    capabilities: list[dict] | None = None,
+) -> str:
     allowed = soul.get("behavior", {}).get("tool_policy", {}).get("allowed_tools", [])
     from rasa.gui.chat import TOOL_DEFS as CHAT_TOOL_DEFS
     tool_infos = []
@@ -58,6 +64,10 @@ def _render_system_prompt(soul: dict, project_summary: str = "", task_context: s
             "active_tasks": task_context,
         },
     }
+    if capabilities:
+        for c in capabilities:
+            c["capability_list"] = c.get("capabilities", [])
+        ctx["memory"]["agent_capabilities"] = capabilities
     body = chevron.render(soul["prompt"]["system_template"], ctx)
     if "context_injection" in soul.get("prompt", {}):
         body += "\n\n" + chevron.render(soul["prompt"]["context_injection"], ctx)
@@ -100,6 +110,14 @@ class OrchestratorRuntime:
     def get_mode(self) -> str:
         return self._mode
 
+    def _load_capabilities(self) -> list[dict]:
+        """Fetch agent capabilities from the registry for system prompt injection."""
+        try:
+            registry = CapabilityRegistry()
+            return registry.list_capabilities()
+        except Exception:
+            return []
+
     def _render_system(self) -> str:
         summary = ""
         task_ctx = ""
@@ -109,7 +127,8 @@ class OrchestratorRuntime:
             if tasks:
                 active = [t for t in tasks if t["status"] in ("PENDING", "ASSIGNED", "RUNNING")]
                 task_ctx = f"{len(tasks)} total, {len(active)} active"
-        return _render_system_prompt(self.soul, summary, task_ctx)
+        caps = self._load_capabilities()
+        return _render_system_prompt(self.soul, summary, task_ctx, caps)
 
     def _get_tool_defs(self) -> list[dict]:
         allowed = self.soul.get("behavior", {}).get("tool_policy", {}).get("allowed_tools", [])
