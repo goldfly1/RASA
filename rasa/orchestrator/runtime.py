@@ -193,6 +193,26 @@ class OrchestratorRuntime:
                 else:
                     return {"result": "No project selected. Create or select a project first."}
 
+            elif tool_name == "capability_query":
+                from rasa.orchestrator.capabilities import CapabilityRegistry
+                cr = CapabilityRegistry()
+                results = cr.list_capabilities()
+                category = args.get("category", "").strip().lower()
+                role = args.get("role", "").strip().lower()
+                if category:
+                    results = [
+                        r for r in results
+                        if any(
+                            c.get("category", "").lower() == category
+                            for c in (r.get("capabilities") or [])
+                        )
+                    ]
+                if role:
+                    results = [r for r in results if r.get("agent_role", "").lower() == role]
+                if not results:
+                    return {"result": "No agents found matching the query."}
+                return {"result": json.dumps(results, indent=2)}
+
             # ── File tools (reuse chat.py logic) ──
             elif tool_name == "file_read":
                 path = Path(args["path"])

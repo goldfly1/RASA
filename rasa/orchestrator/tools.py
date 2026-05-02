@@ -83,4 +83,24 @@ ORCHESTRATOR_TOOL_DEFS = {
             },
         },
     },
+    "capability_query": {
+        "type": "function",
+        "function": {
+            "name": "capability_query",
+            "description": "Query the capability registry to find which specialist agents can handle a specific type of work. Returns agents matching the requested category or role.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Capability category to filter by (e.g., planning, design, implementation, review, testing, analysis, documentation)",
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "Agent role to filter by (e.g., PLANNER, ARCHITECT, CODER, REVIEWER)",
+                    },
+                },
+            },
+        },
+    },
 }

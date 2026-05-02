@@ -90,6 +90,7 @@ behavior:
       - "task_query"
       - "task_list"
       - "project_status"
+      - "capability_query"
     denied_tools:
       - "file_write"
       - "shell_exec"
