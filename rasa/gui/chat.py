@@ -306,11 +306,11 @@ def _render_system_prompt(soul: dict) -> str:
 
 
 def _resolve_model(soul: dict) -> tuple[str, str]:
-    tier = soul.get("model", {}).get("default_tier", "standard")
-    if tier == "premium":
-        model = os.environ.get("RASA_PREMIUM_MODEL", "deepseek-v4-pro:cloud")
-    else:
-        model = os.environ.get("RASA_DEFAULT_MODEL", "deepseek-v4-flash:cloud")
+    """Resolve model — canonical pattern: ollama launch claude --model deepseek-v4-pro:cloud."""
+    model = (os.environ.get("RASA_MODEL")
+             or (os.environ.get("RASA_PREMIUM_MODEL", "deepseek-v4-pro:cloud")
+                 if soul.get("model", {}).get("default_tier") == "premium"
+                 else os.environ.get("RASA_DEFAULT_MODEL", "deepseek-v4-flash:cloud")))
     base_url = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
     return base_url, model
 

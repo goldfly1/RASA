@@ -22,5 +22,11 @@ agent-reviewer: .venv\Scripts\python -m rasa.agent.runtime --soul souls/reviewer
 agent-planner: .venv\Scripts\python -m rasa.agent.runtime --soul souls/planner-v1.yaml
 agent-architect: .venv\Scripts\python -m rasa.agent.runtime --soul souls/architect-v1.yaml
 
+# === GUI (NiceGUI web dashboard :8401) ===
+gui-nice: .venv\Scripts\python -m rasa.gui_nice
+
+# === Legacy GUI (Tkinter) ===
+gui: .venv\Scripts\python -m rasa.gui
+
 # === Observability ===
 logs: .venv\Scripts\python scripts/observe.py --interval 60

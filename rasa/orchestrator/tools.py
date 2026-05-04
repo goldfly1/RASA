@@ -103,4 +103,53 @@ ORCHESTRATOR_TOOL_DEFS = {
             },
         },
     },
+    "request_human_input": {
+        "type": "function",
+        "function": {
+            "name": "request_human_input",
+            "description": (
+                "Request guidance, approval, or answers from the human operator. "
+                "Use this when you need clarification, are blocked by an ambiguous decision, "
+                "or need permission to proceed. The human will see this request on the dashboard "
+                "and respond. After calling this, use check_human_response on a future turn "
+                "to see if the human has answered."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Clear explanation of why human input is needed. What question or decision is blocked?",
+                    },
+                    "payload": {
+                        "type": "object",
+                        "description": "Optional structured context: options, data, or any JSON info the human might need.",
+                    },
+                },
+                "required": ["reason"],
+            },
+        },
+    },
+    "check_human_response": {
+        "type": "function",
+        "function": {
+            "name": "check_human_response",
+            "description": (
+                "Check whether the human has responded to a previous request_human_input call. "
+                "Call this on a subsequent tool turn AFTER calling request_human_input. "
+                "If the human has responded, the result will include their guidance text. "
+                "If the human has not responded yet, you will be told to wait and try again later."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "review_id": {
+                        "type": "string",
+                        "description": "The review UUID returned by the most recent request_human_input call for this question.",
+                    },
+                },
+                "required": ["review_id"],
+            },
+        },
+    },
 }

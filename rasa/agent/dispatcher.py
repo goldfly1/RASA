@@ -51,17 +51,18 @@ def _load_soul(soul_id) -> dict:
 
 
 def _resolve_model(soul, override) -> tuple:
-    default = os.environ.get("RASA_DEFAULT_MODEL", "deepseek-v4-flash:cloud")
-    if override:
-        model = override
-    elif soul.get("model", {}).get("preferred_model"):
-        model = soul["model"]["preferred_model"]
-    else:
-        tier = soul.get("model", {}).get("default_tier", "standard")
-        if tier == "premium":
-            model = os.environ.get("RASA_PREMIUM_MODEL", "deepseek-v4-pro:cloud")
+    """Resolve model following canonical pattern: ollama launch claude --model deepseek-v4-pro:cloud."""
+    # Single override takes precedence: RASA_MODEL > CLI --model-override
+    model = os.environ.get("RASA_MODEL") or override
+    if not model:
+        if soul.get("model", {}).get("preferred_model"):
+            model = soul["model"]["preferred_model"]
         else:
-            model = default
+            tier = soul.get("model", {}).get("default_tier", "standard")
+            if tier == "premium":
+                model = os.environ.get("RASA_PREMIUM_MODEL", "deepseek-v4-pro:cloud")
+            else:
+                model = os.environ.get("RASA_DEFAULT_MODEL", "deepseek-v4-flash:cloud")
     base_url = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
     return base_url, model
 

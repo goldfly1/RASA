@@ -16,6 +16,7 @@ import yaml
 from rasa.orchestrator.capabilities import CapabilityRegistry
 from rasa.orchestrator.delegator import TaskDelegator
 from rasa.orchestrator.project import ProjectManager
+from rasa.orchestrator.reviews import ReviewManager
 from rasa.orchestrator.tools import ORCHESTRATOR_TOOL_DEFS
 
 SOULS_DIR = Path(__file__).parent.parent.parent / "souls"
@@ -92,6 +93,7 @@ class OrchestratorRuntime:
         self.soul = _load_soul("orchestrator-v1")
         self.delegator = TaskDelegator()
         self.project_mgr = ProjectManager()
+        self.review_mgr = ReviewManager()
         self._messages: list[dict] = []
         self._project_id: str | None = None
         self._mode: str = "step_by_step"  # or "autonomous"
@@ -128,6 +130,13 @@ class OrchestratorRuntime:
                 active = [t for t in tasks if t["status"] in ("PENDING", "ASSIGNED", "RUNNING")]
                 task_ctx = f"{len(tasks)} total, {len(active)} active"
         caps = self._load_capabilities()
+        # Ingest pending human reviews into context so the LLM knows to poll
+        pending_reviews = self.review_mgr.get_pending_reviews(limit=5)
+        if pending_reviews:
+            lines = []
+            for r in pending_reviews:
+                lines.append(f"- Review {r['id'][:8]}...: {r['reason'][:120]}")
+            task_ctx += "\n\n## Pending Human Reviews\n" + "\n".join(lines)
         return _render_system_prompt(self.soul, summary, task_ctx, caps)
 
     def _get_tool_defs(self) -> list[dict]:
@@ -212,6 +221,57 @@ class OrchestratorRuntime:
                 if not results:
                     return {"result": "No agents found matching the query."}
                 return {"result": json.dumps(results, indent=2)}
+
+            elif tool_name == "request_human_input":
+                reason = args["reason"]
+                payload = args.get("payload", {})
+                review = self.review_mgr.create_review(
+                    task_id=self._project_id or "orchestrator-session",
+                    agent_id="orchestrator-v1",
+                    reason=reason,
+                    payload=payload,
+                )
+                return {
+                    "result": (
+                        f"Human review requested. Review ID: {review['id']}. "
+                        f"Reason: {reason}. "
+                        "The human will see this on the dashboard. "
+                        "Call check_human_response with this review_id on a later turn "
+                        "to see if the human has responded."
+                    )
+                }
+
+            elif tool_name == "check_human_response":
+                review_id = args["review_id"]
+                review = self.review_mgr.get_review(review_id)
+                if not review:
+                    return {"result": f"Review {review_id} not found."}
+
+                if review["status"] == "answered":
+                    response_text = review.get("response", "")
+                    return {
+                        "result": (
+                            f"The human has responded to review {review_id}.\n"
+                            f"Reviewer: {review.get('reviewer', 'unknown')}\n"
+                            f"Guidance: {response_text}\n"
+                            "You should follow this guidance and proceed."
+                        )
+                    }
+                elif review["status"] == "pending":
+                    return {
+                        "result": (
+                            f"Review {review_id} is still pending. "
+                            "The human has not responded yet. "
+                            "Continue with other work and check again later."
+                        )
+                    }
+                else:
+                    return {
+                        "result": (
+                            f"Review {review_id} has status '{review['status']}'. "
+                            f"Response: {review.get('response', 'N/A')}"
+                        )
+                    }
 
             # ── File tools (reuse chat.py logic) ──
             elif tool_name == "file_read":
@@ -300,13 +360,10 @@ class OrchestratorRuntime:
 
         self._messages.append({"role": "user", "content": text})
 
-        # Model config
+        # Model config — canonical pattern: ollama launch claude --model deepseek-v4-pro:cloud
         model_cfg = self.soul.get("model", {})
-        tier = model_cfg.get("default_tier", "premium")
-        if tier == "premium":
-            model = os.environ.get("RASA_PREMIUM_MODEL", "deepseek-v4-pro:cloud")
-        else:
-            model = os.environ.get("RASA_DEFAULT_MODEL", "deepseek-v4-flash:cloud")
+        model = (os.environ.get("RASA_MODEL")
+                 or os.environ.get("RASA_PREMIUM_MODEL", "deepseek-v4-pro:cloud"))
         base_url = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
         api_key = os.environ.get("OLLAMA_API_KEY", "ollama")
         tool_defs = self._get_tool_defs()

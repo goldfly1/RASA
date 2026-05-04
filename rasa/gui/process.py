@@ -66,7 +66,7 @@ class ProcessManager:
             return False
         return True
 
-    async def start(self, svc: ServiceDef) -> int:
+    async def start(self, svc: ServiceDef, capture_output: bool = True) -> int:
         if self.is_running(svc.id):
             raise AlreadyRunningError(f"Service '{svc.id}' is already running")
 
@@ -74,12 +74,15 @@ class ProcessManager:
         subprocess_env = os.environ.copy()
         subprocess_env.update(self._env)
 
+        stdout = asyncio.subprocess.PIPE if capture_output else asyncio.subprocess.DEVNULL
+        stderr = asyncio.subprocess.PIPE if capture_output else asyncio.subprocess.DEVNULL
+
         proc = await asyncio.create_subprocess_exec(
             *svc.start_command,
             cwd=self._project_root,
             env=subprocess_env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stdout=stdout,
+            stderr=stderr,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
 

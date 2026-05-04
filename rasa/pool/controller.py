@@ -39,7 +39,7 @@ async def _handle_heartbeat(env: Envelope) -> None:
 
 
 def _spawn(task_id: str, soul_id: str, goal: str | None) -> None:
-    """Dispatch a task to Windows side via a new subprocess."""
+    """Dispatch a task to a Windows subprocess — ollama launch claude --model deepseek-v4-pro:cloud."""
     venv_python = r"C:\Users\goldf\rasa\.venv\Scripts\python.exe"
     cmd = [
         venv_python,
@@ -50,7 +50,10 @@ def _spawn(task_id: str, soul_id: str, goal: str | None) -> None:
     ]
     env = os.environ.copy()
     env["RASA_DB_PASSWORD"] = os.environ.get("RASA_DB_PASSWORD", "")
-    print(f"[pool] spawning {soul_id} for task {task_id}")
+    # Canonical model config: ollama launch claude --model deepseek-v4-pro:cloud
+    env.setdefault("RASA_MODEL", "deepseek-v4-pro:cloud")
+    env.setdefault("OLLAMA_BASE_URL", os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"))
+    print(f"[pool] spawning {soul_id} for task {task_id} (model=deepseek-v4-pro:cloud)")
     subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 

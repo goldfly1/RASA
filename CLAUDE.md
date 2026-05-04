@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-RASA (Reliable Autonomous System of Agents) is a multi-agent orchestration platform running on a single-node lab machine. **This Claude Code instance is the orchestrator** — it receives requests (via terminal or GUI relay), works directly with real tools (file I/O, git, shell, DB), and delegates to specialist agents as needed. Task records in PostgreSQL provide an audit trail.
+RASA (Reliable Autonomous System of Agents) is a multi-agent orchestration platform running on a single-node lab machine. **This Claude Code instance follows user direction** — it implements features, debugs, refactors, and delegates to specialist sub-agents when instructed. Task records in PostgreSQL provide an audit trail.
 
 - **Repo**: https://github.com/goldfly1/rasa
 - **Hardware**: Intel Ultra 7 255, 64GB RAM, RTX 5060 8GB, 1TB SSD (~250GB free)
@@ -15,35 +15,35 @@ RASA (Reliable Autonomous System of Agents) is a multi-agent orchestration platf
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Claude Code (orchestrator) — this session           │
+│  Claude Code (coding assistant) — this session       │
 │  ┌─────────────────────────────────────────────────┐ │
 │  │  Real tools: Read, Edit, Write, Bash, Agent,    │ │
 │  │  Grep, Glob, WebSearch, WebFetch, TaskCreate    │ │
 │  └─────────────────────────────────────────────────┘ │
-│         │                          ▲                  │
-│         ▼                          │                  │
-│  ┌──────────┐    ┌──────────────────┴──────┐         │
-│  │  Tkinter │───►│  .orch_relay/ (files)    │         │
-│  │  GUI     │◄───│  inbox/  →  outbox/      │         │
-│  └──────────┘    └──────────┬───────────────┘         │
-│                             │                          │
-│         ┌───────────────────┴────────────┐            │
-│         │  PostgreSQL (rasa_orch)         │            │
-│         │  ├─ tasks (audit trail)         │            │
-│         │  ├─ projects                    │            │
-│         │  ├─ agent_capabilities          │            │
-│         │  └─ bus_messages (LISTEN/NOTIFY)│            │
-│         └───────────────────┬────────────┘            │
-│                             │                          │
-│         ┌───────────────────┴────────────┐            │
-│         │  Python agent subprocesses      │            │
-│         │  (pool controller → dispatcher) │            │
-│         └────────────────────────────────┘            │
+│         │                                             │
+│         ▼                                             │
+│  ┌──────────┐    ┌──────────────────┐                 │
+│  │  Web     │───►│  :8400 API       │                 │
+│  │  GUI     │◄───│  server          │                 │
+│  └──────────┘    └──────┬───────────┘                 │
+│                         │                             │
+│         ┌───────────────┴────────────┐                │
+│         │  PostgreSQL (rasa_orch)     │                │
+│         │  ├─ tasks (audit trail)    │                │
+│         │  ├─ projects               │                │
+│         │  ├─ agent_capabilities     │                │
+│         │  └─ bus_messages           │                │
+│         └───────────────┬────────────┘                │
+│                         │                             │
+│         ┌───────────────┴────────────┐                │
+│         │  Python agent subprocesses  │                │
+│         │  (pool controller → dispatch)│               │
+│         └────────────────────────────┘                │
 └─────────────────────────────────────────────────────┘
 ```
 
-- **Claude Code is the orchestrator**: Not a Python LLM-calling loop. Receives messages, works directly with real tools, writes results. The Python `OrchestratorRuntime` is deprecated for orchestrator duties.
-- **File relay for GUI**: `.orch_relay/inbox/` and `.orch_relay/outbox/` bridge the Tkinter ChatPane to Claude Code. Server at `:8400` writes inbox, polls outbox. Claude Code reads inbox, processes, writes outbox.
+- **Claude Code as assistant**: Works directly with real tools (file I/O, git, shell, DB). Takes direction from the user. The RASA orchestrator is a Python service that coordinates agents and manages task flow — Claude Code assists in building and debugging it.
+- **File relay**: `.orch_relay/inbox/` and `.orch_relay/outbox/` bridge the NiceGUI Chat tab to Claude Code. Server at `:8400` writes inbox, polls outbox. Removed from the dashboard since CLI is the primary interface.
 - **PostgreSQL as audit trail**: `rasa_orch.tasks` records all delegated work. Not the message bus — the trace. LISTEN/NOTIFY still used for pool controller wake-up.
 - **Task state machine**: `PENDING → ASSIGNED → RUNNING → CHECKPOINTED/COMPLETED/FAILED`.
 
@@ -63,7 +63,7 @@ pytest tests/ -v -k "test_name"
 python -m rasa.gui.server
 
 # Native Tkinter GUI
-python -m rasa.gui_native.launch_gui_native
+python -m rasa.gui_native.app
 
 # Pool controller (spawns agent subprocesses from DB tasks)
 python -m rasa.pool.controller --pool-file config/pool.yaml
@@ -109,7 +109,7 @@ set PGPASSWORD=8764  # then psql works without prompt
 
 ## Key Architecture Decisions
 
-- **Claude Code = orchestrator**: The Python `OrchestratorRuntime` called an LLM with stub tools. This was replaced by Claude Code itself, which has real file I/O, git, shell, and agent delegation capabilities. The orchestration loop is this session.
+- **Claude Code as assistant**: Takes direction from the user. Builds, debugs, and refactors the Python/Go services. Not the orchestrator — that's a Python service.
 - **File relay over HTTP polling**: The Tkinter ChatPane sends messages to the Starlette server (`:8400`), which writes them to `.orch_relay/inbox/` and polls `.orch_relay/outbox/`. Claude Code monitors the inbox (via `scripts/watch_orch_relay.py`), processes with real tools, and writes responses back. Simple, no WebSockets needed.
 - **DB as audit trail, not message bus**: Tasks are written to `rasa_orch.tasks` for traceability. The pool controller uses LISTEN/NOTIFY to wake workers. Redis Pub/Sub only for loss-tolerant ephemeral messages (heartbeats).
 - **Soul sheets**: YAML files defining agent personality and model routing. Rendered via `chevron` (Mustache). The orchestrator soul sheet (`souls/orchestrator-v1.yaml`) is informative — Claude Code doesn't use it as a runtime template.
@@ -122,7 +122,7 @@ When work requires a specialist agent, there are two paths:
 
 ### 1. Claude Code Agent tool (complex/creative work)
 
-Use the `Agent` tool to spawn a specialist Claude Code sub-agent. This gives the sub-agent full file I/O, git, shell access — the same capabilities as the orchestrator.
+Use the `Agent` tool to spawn a specialist Claude Code sub-agent. This gives the sub-agent full file I/O, git, shell access.
 
 ```
 Agent(description="Task summary", prompt="Detailed instructions", subagent_type="general-purpose")

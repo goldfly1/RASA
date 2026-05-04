@@ -312,6 +312,13 @@ IDLE ──► WARMING ──► ACTIVE ──► PAUSED ──► RESUMING ─�
 ```
 
 ### 4.2 Human Handoff Queue
+
+The Human Handoff Queue is implemented as the `human_reviews` table in the `rasa_policy` database. The orchestrator uses two dedicated tools:
+- `request_human_input(reason, payload?)` — creates a `pending` review record, returns review ID
+- `check_human_response(review_id)` — polls for status change to `answered`, returns guidance text
+
+The dashboard polls `GET /api/reviews` and submits responses via `POST /api/reviews/{id}/respond`. A 10-second auto-refresh in the NiceGUI panel keeps the review queue current without WebSockets.
+
 When a task hits `ESCALATED`, the following structure is enqueued:
 
 ```json
@@ -332,6 +339,30 @@ When a task hits `ESCALATED`, the following structure is enqueued:
 ### 4.3 Conflict Resolution & Arbitration
 
 Agent-to-agent negotiation is bounded. If a `REJECT` message is issued in response to a `REQUEST`, the thread enters a negotiation loop with a maximum of **3 rounds**. If no `RESOLVED` message is produced, the Orchestrator automatically transitions the associated `Task` to `ESCALATED` and enqueues it to the **Human Handoff Queue (§4.2)**. The human serves as the final arbiter; no agent role overrides a human decision.
+
+### 4.4 Review Queue State Machine
+
+The human_reviews table follows a simple two-state lifecycle:
+
+```
+                     ┌──────────────┐
+  orchestrator ─────►│   PENDING    │◄──── dashboard polls GET /api/reviews
+  calls              │   (waiting)  │
+  request_human_     └──────┬───────┘
+  input()                    │ user responds via dashboard
+                             ▼
+                     ┌──────────────┐
+                     │   ANSWERED   │
+                     │              │────► orchestrator picks up via
+                     └──────────────┘      check_human_response()
+```
+
+**Transitions:**
+| From | To | Trigger | Notes |
+|------|----|---------|-------|
+| `pending` | `answered` | User submits via dashboard | Idempotent guard: `WHERE status='pending'` |
+
+**Implementation:** `rasa/orchestrator/reviews.py` — `ReviewManager` class with sync psycopg methods. Dashboard at `rasa/gui_nice/reviews_panel.py` polls every 10s. API routes at `GET /api/reviews` and `POST /api/reviews/{id}/respond`.
 
 ---
 
@@ -444,6 +475,8 @@ A deterministic replay requires:
 
 ## 8. Bootstrap & Ingestion Flow
 
+### 8.1 Repository Bootstrap
+
 ```
 New Repository ──► Git Clone ──► Dependency Graph Extractor
                                       │
@@ -473,6 +506,25 @@ New Repository ──► Git Clone ──► Dependency Graph Extractor
        │  Seeded  │
        └──────────┘
 ```
+
+### 8.2 Lore Ingestion Pipeline
+
+Documentation files (`.md`, `.yaml`, `.rst`) are ingested into the lore knowledge base via `scripts/ingest_lore.py`:
+
+```
+Source Files ──► Chunk by ## headings or by size ──► canonical_nodes table
+                                                            │
+                                                            ▼
+                                                   embeddings table (pgvector)
+                                                   via nomic-embed-text
+```
+
+- **Node types:** `manual` (file-level parent), `manual_section` (heading-level children with `outgoing_edges` linking parent→children)
+- **Chunking:** Markdown files split on `##` headings; other files split at 6000-char boundaries
+- **Embeddings:** Batch of 10, truncated to 4000 chars for nomic-embed-text's 2048-token context window
+- **Idempotency:** `ON CONFLICT (name, node_type) DO NOTHING` on nodes; unique index on `(node_id, model, chunk_index)` for embeddings
+- **Usage:** `python scripts/ingest_lore.py --all --embed --embed-model nomic-embed-text`
+- **Storage:** `rasa_memory` database: `canonical_nodes` table (graph nodes with JSONB body) + `embeddings` table (vector(1536) with HNSW index)
 
 ---
 
@@ -625,7 +677,47 @@ Consumes `Task` gate results and `ReasoningTrace` records to compute KPIs, bench
 
 ---
 
-## Pending Additions & Change Log
+---
+
+## 14. Operational Tooling
+
+### 14.1 Desktop Launchers
+
+The project provides double-click `.bat` launchers in `launchers/` and desktop shortcuts for all common operations:
+
+| Launcher | Command | Purpose |
+|----------|---------|---------|
+| `start_all.bat` | `honcho start` | All services (API :8400, dashboard :8401, pool controller, agents) |
+| `start_dashboard.bat` | `python -m rasa.gui_nice` | NiceGUI web dashboard |
+| `start_api.bat` | `python -m rasa.gui.server` | API server |
+| `start_pool.bat` | `python -m rasa.pool.controller` | Pool controller (agent task dispatch) |
+| `start_heartbeat.bat` | `scripts/heartbeat_monitor.py --loop` | Self-healing monitor |
+| `db_shell.bat` | `psql -U postgres` | PostgreSQL shell |
+| `ingest_lore.bat` | `scripts/ingest_lore.py --all --embed` | Re-seed documentation into lore store |
+| `run_tests.bat` | `pytest tests/ -v` | Test suite |
+
+### 14.2 Heartbeat Self-Healing Monitor
+
+`scripts/heartbeat_monitor.py` runs a continuous health check loop that restarts dead services:
+
+- **Poll interval:** 30 seconds (configurable via `--interval`)
+- **Scope:** All services in the registry that have `can_start=True` and `is_external=False`
+- **Cooldown:** 60-second minimum between restart attempts per service to prevent restart loops
+- **Mechanism:** Uses the same `HealthChecker` and `ProcessManager` classes as the GUI server
+- **Logging:** `logs/heartbeat.log` with timestamps
+- **Modes:** `--loop` for continuous operation, default one-shot for scheduled task use
+
+### 14.3 Auto-Interview on Project Creation
+
+When a new project is created via the API or dashboard, the server auto-dispatchs a planner task:
+
+1. `POST /api/orchestrator/projects` creates the project record
+2. `TaskDelegator.create_task(soul_id="planner-v1")` creates a planning task
+3. `TaskDelegator.assign_task()` sets status to `ASSIGNED` and sends PG NOTIFY on `tasks_assigned` channel
+4. Pool controller receives the notification and spawns `rasa.agent.dispatcher --soul planner-v1 --task-id <id> --one-shot`
+5. Planner agent produces a structured plan decomposed into actionable tasks
+
+The interactive interview capability (back-and-forth with user via `request_human_input`) requires the agent runtime to support function-calling tool execution — a future enhancement.
 
 | # | Item | Status | Owner |
 |---|------|--------|-------|
@@ -635,6 +727,9 @@ Consumes `Task` gate results and `ReasoningTrace` records to compute KPIs, bench
 | 4 | Plugin ABI for external tool providers | TBD | — |
 | 5 | Runtime dynamic model routing (tier switching mid-session) | TBD | — |
 | 6 | Recovery / Pool controller explicit state-machine definitions | **Addressed in implementation schema** | — |
+| 7 | Human-in-the-loop review channel (§4.2, §4.4) | **Addressed** | — |
+| 8 | Lore ingestion pipeline (§8.2) | **Addressed** | — |
+| 9 | Operational tooling: desktop launchers, heartbeat monitor, auto-interview (§14) | **Addressed** | — |
 
 ---
 

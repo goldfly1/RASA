@@ -19,6 +19,7 @@ from rasa.gui.health import HealthChecker
 from rasa.gui.process import AlreadyRunningError, NotRunningError, ProcessManager
 from rasa.gui.registry import build_registry, get_service_map
 from rasa.orchestrator.runtime import OrchestratorRuntime
+from rasa.orchestrator.reviews import ReviewManager
 
 # ── Claude Code relay directories ──
 
@@ -324,6 +325,28 @@ async def orchestrator_create_project(request):
     from rasa.orchestrator.project import ProjectManager
     pm = ProjectManager()
     project = pm.create_project(name, goal, description)
+    project_id = project["id"]
+
+    # Auto-trigger planner interview for the new project
+    try:
+        from rasa.orchestrator.delegator import TaskDelegator
+        td = TaskDelegator()
+        task_id = td.create_task(
+            soul_id="planner-v1",
+            title=f"Plan: {name}",
+            description=(
+                f"A new project has been created: **{name}**.\n\n"
+                f"Goal: {goal or 'Not specified'}\n"
+                f"Description: {description or 'Not specified'}\n\n"
+                "Conduct an interview with the user to refine the project scope, "
+                "break down the goal into actionable tasks, and produce a plan. "
+                "Ask clarifying questions about requirements, timeline, and constraints."
+            ),
+        )
+        td.assign_task(task_id)
+    except Exception as e:
+        print(f"WARN: Failed to auto-create planner task: {e}", flush=True)
+
     return JSONResponse({"project": project})
 
 
@@ -350,6 +373,49 @@ async def orchestrator_register_capability(request):
         access_level=body.get("access_level", "read-only"),
     )
     return JSONResponse({"capability": cap})
+
+
+# ── Human-in-the-Loop Reviews ──
+
+_review_mgr: ReviewManager | None = None
+
+
+def _get_review_mgr() -> ReviewManager:
+    global _review_mgr
+    if _review_mgr is None:
+        _review_mgr = ReviewManager()
+    return _review_mgr
+
+
+async def reviews_list(request):
+    mgr = _get_review_mgr()
+    limit = int(request.query_params.get("limit", 50))
+    status = request.query_params.get("status")
+    offset = int(request.query_params.get("offset", 0))
+    reviews = mgr.list_reviews(limit=limit, offset=offset, status_filter=status)
+    pending_count = len(mgr.get_pending_reviews())
+    return JSONResponse({"reviews": reviews, "pending_count": pending_count})
+
+
+async def reviews_respond(request):
+    body = await request.json()
+    review_id = request.path_params["id"]
+    response = body.get("response", "").strip()
+    if not response:
+        return JSONResponse({"error": "Response text is required"}, status_code=400)
+    mgr = _get_review_mgr()
+    ok = mgr.respond_to_review(
+        review_id=review_id,
+        response=response,
+        reviewer=body.get("reviewer", "dashboard"),
+    )
+    if not ok:
+        return JSONResponse(
+            {"error": f"Review {review_id} not found or already answered"},
+            status_code=404,
+        )
+    review = mgr.get_review(review_id)
+    return JSONResponse({"review": review})
 
 
 # ── App ──
@@ -407,6 +473,8 @@ routes = [
     Route("/api/orchestrator/projects", orchestrator_create_project, methods=["POST"]),
     Route("/api/orchestrator/capabilities", orchestrator_capabilities),
     Route("/api/orchestrator/capabilities", orchestrator_register_capability, methods=["POST"]),
+    Route("/api/reviews", reviews_list),
+    Route("/api/reviews/{id}/respond", reviews_respond, methods=["POST"]),
 ]
 
 # Only mount static if the directory exists and has an index.html

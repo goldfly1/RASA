@@ -91,6 +91,8 @@ behavior:
       - "task_list"
       - "project_status"
       - "capability_query"
+      - "request_human_input"
+      - "check_human_response"
     denied_tools:
       - "file_write"
       - "shell_exec"
