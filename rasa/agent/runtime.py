@@ -31,6 +31,7 @@ import httpx
 import psycopg
 import yaml
 
+from rasa.agent.tools import AGENT_TOOL_DEFS, execute_tool
 from rasa.bus.envelope import Envelope, Metadata
 from rasa.bus.redis import RedisPublisher
 from rasa.llm_gateway.client import GatewayClient, GatewayError
@@ -165,21 +166,66 @@ class AgentRuntime:
 
         self.state = AgentState.ACTIVE
         model_cfg = self.soul.get("model", {})
-        try:
-            result = await self.gateway.complete(
-                system_prompt,
-                tier=model_cfg.get("default_tier", "standard"),
-                temperature=model_cfg.get("temperature", 0.2),
-                max_tokens=model_cfg.get("max_tokens", 8192),
-                top_p=model_cfg.get("top_p", 1.0),
-            )
-        except GatewayError as exc:
-            await self._write_failure(task, str(exc))
-            self.state = AgentState.IDLE
-            self._current_task_id = None
-            return
 
-        await self._write_result(task, result)
+        # Build tool definitions from soul sheet's allowed_tools
+        allowed = self.soul.get("behavior", {}).get("tool_policy", {}).get("allowed_tools", [])
+        tool_defs = [AGENT_TOOL_DEFS[name] for name in allowed if name in AGENT_TOOL_DEFS]
+
+        # Tool-calling loop: call LLM → execute tools → repeat until final content
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": task["description"] or task["title"]},
+        ]
+
+        max_tool_rounds = 10
+        for _ in range(max_tool_rounds):
+            try:
+                result = await self.gateway.complete(
+                    "",
+                    messages=messages,
+                    tools=tool_defs or None,
+                    tier=model_cfg.get("default_tier", "standard"),
+                    temperature=model_cfg.get("temperature", 0.2),
+                    max_tokens=model_cfg.get("max_tokens", 8192),
+                    top_p=model_cfg.get("top_p", 1.0),
+                )
+            except GatewayError as exc:
+                await self._write_failure(task, str(exc))
+                self.state = AgentState.IDLE
+                self._current_task_id = None
+                return
+
+            tool_calls = result.get("tool_calls", [])
+            if not tool_calls:
+                await self._write_result(task, result)
+                self.state = AgentState.IDLE
+                self._current_task_id = None
+                return
+
+            # Append assistant message with tool_calls
+            messages.append({
+                "role": "assistant",
+                "content": result.get("content", ""),
+                "tool_calls": tool_calls,
+            })
+
+            # Execute each tool and append result message
+            for tc in tool_calls:
+                fn = tc.get("function", {})
+                name = fn.get("name", "")
+                try:
+                    args = json.loads(fn.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    args = {}
+                tool_result = await execute_tool(name, args)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": json.dumps(tool_result),
+                })
+
+        # Exceeded max tool rounds
+        await self._write_failure(task, "Exceeded max tool call rounds (10)")
         self.state = AgentState.IDLE
         self._current_task_id = None
 

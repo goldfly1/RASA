@@ -62,6 +62,8 @@ class GatewayClient:
         self,
         prompt: str,
         *,
+        messages: list[dict[str, Any]] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         tier: str | None = None,
         model: str | None = None,
         temperature: float | None = None,
@@ -75,13 +77,15 @@ class GatewayClient:
         If *model* is given it overrides tier resolution (on-the-fly override,
         not used in pilot but accepted for forward-compat).
         If *seed* is given the cache is bypassed (deterministic replay).
+        If *tools* is given the cache is bypassed (tool calls are stateful).
+        If *messages* is given it replaces the default [user] message construction.
         """
         provider_name, model_id = self._router.resolve(tier)
         if model:
             model_id = model
 
         cache_key = ""
-        if seed is None:
+        if seed is None and not tools:
             cache_key = _cache_key(prompt, model_id, temperature, max_tokens)
             cached = await self._cache_get(cache_key)
             if cached is not None:
@@ -89,6 +93,8 @@ class GatewayClient:
 
         result = await self._route_with_fallback(
             prompt=prompt,
+            messages=messages,
+            tools=tools,
             provider_name=provider_name,
             model_id=model_id,
             temperature=temperature,
@@ -98,7 +104,7 @@ class GatewayClient:
             extra_body=extra_body,
         )
 
-        if cache_key:
+        if cache_key and not result.get("tool_calls"):
             await self._cache_set(cache_key, result, ttl=self._router.cache_ttl)
 
         return result
@@ -130,6 +136,8 @@ class GatewayClient:
         self,
         *,
         prompt: str,
+        messages: list[dict[str, Any]] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         provider_name: str,
         model_id: str,
         temperature: float | None,
@@ -155,6 +163,8 @@ class GatewayClient:
                     provider_name=prov_name,
                     model_id=mod_id,
                     prompt=prompt,
+                    messages=messages,
+                    tools=tools,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     top_p=top_p,
@@ -223,6 +233,8 @@ async def _call_provider(
     provider_name: str,
     model_id: str,
     prompt: str,
+    messages: list[dict[str, Any]] | None = None,
+    tools: list[dict[str, Any]] | None = None,
     temperature: float | None,
     max_tokens: int | None,
     top_p: float | None,
@@ -236,9 +248,11 @@ async def _call_provider(
 
     payload: dict[str, Any] = {
         "model": model_id,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages or [{"role": "user", "content": prompt}],
         "stream": False,
     }
+    if tools:
+        payload["tools"] = tools
     if temperature is not None:
         payload["temperature"] = temperature
     if max_tokens is not None:
@@ -254,8 +268,10 @@ async def _call_provider(
         r = await c.post(url, json=payload)
         r.raise_for_status()
         data = r.json()
+        choice = data["choices"][0]["message"]
         return {
-            "content": data["choices"][0]["message"]["content"],
+            "content": choice.get("content", ""),
+            "tool_calls": choice.get("tool_calls", []),
             "model": data.get("model", model_id),
             "usage": data.get("usage", {}),
         }
