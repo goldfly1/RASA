@@ -40,6 +40,7 @@ def _render_system_prompt(
     project_summary: str = "",
     task_context: str = "",
     capabilities: list[dict] | None = None,
+    service_status: str = "",
 ) -> str:
     allowed = soul.get("behavior", {}).get("tool_policy", {}).get("allowed_tools", [])
     from rasa.gui.chat import TOOL_DEFS as CHAT_TOOL_DEFS
@@ -65,6 +66,7 @@ def _render_system_prompt(
         "memory": {
             "project_state": project_summary,
             "active_tasks": task_context,
+            "service_status": service_status,
         },
     }
     if capabilities:
@@ -92,9 +94,16 @@ def _render_system_prompt(
 # ── Runtime ──
 
 class OrchestratorRuntime:
-    """Multi-turn orchestrator with task delegation and project tracking."""
+    """Multi-turn orchestrator with task delegation, service management, and project tracking."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        process_manager=None,
+        health_cache: dict | None = None,
+        health_cache_lock=None,
+        service_map: dict | None = None,
+        registry: list | None = None,
+    ):
         self.soul = _load_soul("orchestrator-v1")
         self.delegator = TaskDelegator()
         self.project_mgr = ProjectManager()
@@ -102,6 +111,12 @@ class OrchestratorRuntime:
         self._messages: list[dict] = []
         self._project_id: str | None = None
         self._mode: str = "step_by_step"  # or "autonomous"
+        # Service management (set by server.py)
+        self.process_manager = process_manager
+        self._health_cache = health_cache or {}
+        self._health_cache_lock = health_cache_lock
+        self._service_map = service_map or {}
+        self._registry = registry or []
 
     @property
     def project_id(self) -> str | None:
@@ -142,7 +157,29 @@ class OrchestratorRuntime:
             for r in pending_reviews:
                 lines.append(f"- Review {r['id'][:8]}...: {r['reason'][:120]}")
             task_ctx += "\n\n## Pending Human Reviews\n" + "\n".join(lines)
-        return _render_system_prompt(self.soul, summary, task_ctx, caps)
+        # Build service status string
+        svc_lines = []
+        if self._health_cache_lock:
+            import asyncio
+            async def _read_cache():
+                async with self._health_cache_lock:
+                    return dict(self._health_cache)
+            try:
+                cache = asyncio.get_event_loop().run_until_complete(_read_cache())
+            except Exception:
+                cache = self._health_cache
+        else:
+            cache = self._health_cache if isinstance(self._health_cache, dict) else {}
+        for sid, info in cache.items():
+            st = info.get("status", "unknown")
+            if st == "running":
+                svc_lines.append(f"  {sid}: ✅ running")
+            elif st == "error":
+                svc_lines.append(f"  {sid}: ❌ error")
+            else:
+                svc_lines.append(f"  {sid}: ⬜ {st}")
+        service_status = "\n".join(svc_lines) if svc_lines else "Service cache not yet initialized."
+        return _render_system_prompt(self.soul, summary, task_ctx, caps, service_status)
 
     def _get_tool_defs(self) -> list[dict]:
         allowed = self.soul.get("behavior", {}).get("tool_policy", {}).get("allowed_tools", [])
@@ -323,6 +360,70 @@ class OrchestratorRuntime:
                         },
                     }
 
+            # ── Service management tools ──
+            elif tool_name == "service_list":
+                if not self._registry:
+                    return {"result": "Service registry not available — orchestrator not fully initialized."}
+                lines = []
+                for svc in self._registry:
+                    status = "unknown"
+                    pid = None
+                    if self._health_cache_lock:
+                        async with self._health_cache_lock:
+                            cached = self._health_cache.get(svc.id, {})
+                            status = cached.get("status", "unknown")
+                            pid = cached.get("pid")
+                    else:
+                        if self.process_manager and self.process_manager.is_running(svc.id):
+                            status = "running"
+                    lines.append(
+                        f"  {svc.id:22s}  {status:10s}  "
+                        f"{'pid=' + str(pid) if pid else '':10s}  "
+                        f"({svc.group.value})"
+                    )
+                    deps = svc.depends_on
+                    if deps:
+                        lines[-1] += f"  depends: {', '.join(deps)}"
+                return {"result": "Services:\n" + "\n".join(lines)}
+
+            elif tool_name == "service_start":
+                service_id = args.get("service_id", "")
+                svc = self._service_map.get(service_id)
+                if not svc:
+                    return {"result": f"Service '{service_id}' not found."}
+                if not svc.can_start:
+                    return {"result": f"Service '{service_id}' is external and cannot be started from here."}
+                if not self.process_manager:
+                    return {"result": "Process manager not available."}
+                try:
+                    pid = await self.process_manager.start(svc)
+                    from rasa.gui.health import HealthChecker
+                    await asyncio.sleep(1.0)
+                    exit_code = self.process_manager.get_exit_code(svc.id)
+                    if exit_code is not None:
+                        stderr = self.process_manager.get_stderr(svc.id)
+                        detail = f"exited immediately (code {exit_code})"
+                        if stderr:
+                            detail += f": {stderr.strip()[:200]}"
+                        await self.process_manager.stop(svc.id)
+                        return {"result": f"Service '{service_id}' {detail}"}
+                    return {
+                        "result": f"Service '{service_id}' starting (PID {pid}). It should be ready shortly.",
+                        "metadata": {"service_id": service_id, "pid": pid, "status": "starting"},
+                    }
+                except Exception as e:
+                    return {"result": f"Failed to start '{service_id}': {e}"}
+
+            elif tool_name == "service_stop":
+                service_id = args.get("service_id", "")
+                if not self.process_manager:
+                    return {"result": "Process manager not available."}
+                try:
+                    await self.process_manager.stop(service_id)
+                    return {"result": f"Service '{service_id}' stopped."}
+                except Exception as e:
+                    return {"result": f"Failed to stop '{service_id}': {e}"}
+
             # ── File tools (reuse chat.py logic) ──
             elif tool_name == "file_read":
                 path = Path(args["path"])
@@ -345,43 +446,107 @@ class OrchestratorRuntime:
                 output = result.stdout.strip() or "(no changes)"
                 return {"result": output}
 
+            elif tool_name == "file_write":
+                path = Path(args["path"])
+                if not path.is_absolute():
+                    path = PROJECT_ROOT / path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(args["content"], encoding="utf-8")
+                return {"result": f"Written {len(args['content'])} bytes to {path}"}
+
+            elif tool_name == "shell_exec":
+                cmd = args["command"]
+                import subprocess
+                result = subprocess.run(
+                    cmd, shell=True, cwd=PROJECT_ROOT,
+                    capture_output=True, text=True, timeout=60,
+                )
+                output = ""
+                if result.stdout:
+                    output += result.stdout
+                if result.stderr:
+                    if output:
+                        output += "\n--- stderr ---\n"
+                    output += result.stderr
+                if result.returncode != 0:
+                    output += f"\n(exit code {result.returncode})"
+                truncated = len(output) > 5000
+                if truncated:
+                    output = output[:5000] + "\n\n...[truncated]"
+                return {"result": output.strip() or f"(exit code {result.returncode})"}
+
             else:
                 return {"result": f"Unknown tool: {tool_name}"}
 
         except Exception as e:
             return {"result": f"Error executing {tool_name}: {e}"}
 
-    # ── Direct agent spawning ──
+    # ── Agent spawning ──
 
     def _spawn_agent(self, task_id: str, soul_id: str) -> None:
-        """Launch a one-shot agent dispatcher subprocess so the task is picked up immediately."""
+        """Launch a daemon AgentRuntime subprocess for the task."""
         if not VENV_PYTHON.exists():
             print(f"[orch] venv python not found at {VENV_PYTHON}, cannot spawn agent", flush=True)
             return
-        cmd = [
-            str(VENV_PYTHON),
-            "-m", "rasa.agent.dispatcher",
-            "--soul", soul_id,
-            "--task-id", task_id,
-            "--one-shot",
-        ]
-        env = os.environ.copy()
-        env.setdefault("RASA_DB_PASSWORD", env.get("RASA_DB_PASSWORD", ""))
-        env.setdefault("RASA_MODEL", env.get("RASA_MODEL", "deepseek-v4-pro:cloud"))
-        env.setdefault("OLLAMA_BASE_URL", env.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"))
-        log_dir = PROJECT_ROOT / "logs"
-        log_dir.mkdir(exist_ok=True)
-        log_path = log_dir / f"agent_{soul_id}_{task_id[:12]}.log"
-        print(f"[orch] spawning {soul_id} for task {task_id[:12]}... (log: {log_path})", flush=True)
-        try:
-            with open(log_path, "w") as log:
-                subprocess.Popen(
-                    cmd, env=env,
-                    stdout=log, stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
-        except Exception as e:
-            print(f"[orch] failed to spawn agent: {e}", flush=True)
+
+        # Map soul_id to known service IDs for daemon agents
+        soul_to_service = {
+            "planner-v1": "agent-planner",
+            "architect-v1": "agent-architect",
+            "coder-v2-dev": "agent-coder",
+            "reviewer-v1": "agent-reviewer",
+        }
+        service_id = soul_to_service.get(soul_id)
+
+        # If we have a process manager, try starting the daemon service
+        if self.process_manager and service_id:
+            svc = self._service_map.get(service_id)
+            if svc:
+                # Check if already running
+                if not self.process_manager.is_running(service_id):
+                    print(f"[orch] starting daemon {service_id} for {soul_id} task {task_id[:12]}", flush=True)
+                    try:
+                        import asyncio
+                        pid = asyncio.run_coroutine_threadsafe(
+                            self.process_manager.start(svc),
+                            asyncio.get_event_loop(),
+                        ).result(timeout=10)
+                        print(f"[orch] {service_id} started PID {pid}", flush=True)
+                    except Exception as e:
+                        print(f"[orch] failed to start {service_id}: {e}, falling back to direct spawn", flush=True)
+                        service_id = None  # fall through to direct spawn
+                else:
+                    print(f"[orch] {service_id} already running, task {task_id[:12]} will be picked up", flush=True)
+
+        # If no process manager or service wasn't started, spawn directly as daemon
+        if not self.process_manager or not service_id:
+            soul_path = SOULS_DIR / f"{soul_id}.yaml"
+            if not soul_path.exists():
+                print(f"[orch] soul not found at {soul_path}, cannot spawn", flush=True)
+                return
+            cmd = [
+                str(VENV_PYTHON),
+                "-m", "rasa.agent.runtime",
+                "--soul", str(soul_path),
+                "--mode", "daemon",
+            ]
+            env = os.environ.copy()
+            env.setdefault("RASA_DB_PASSWORD", env.get("RASA_DB_PASSWORD", ""))
+            env.setdefault("RASA_MODEL", env.get("RASA_MODEL", "deepseek-v4-pro:cloud"))
+            env.setdefault("OLLAMA_BASE_URL", env.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"))
+            log_dir = PROJECT_ROOT / "logs"
+            log_dir.mkdir(exist_ok=True)
+            log_path = log_dir / f"agent_{soul_id}_{task_id[:12]}.log"
+            print(f"[orch] spawning {soul_id} daemon for task {task_id[:12]}... (log: {log_path})", flush=True)
+            try:
+                with open(log_path, "w") as log:
+                    subprocess.Popen(
+                        cmd, env=env,
+                        stdout=log, stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+            except Exception as e:
+                print(f"[orch] failed to spawn agent: {e}", flush=True)
 
     async def _llm_call(self, base_url: str, api_key: str, payload: dict) -> dict:
         """Call the LLM API with retry logic for transient errors."""
@@ -390,7 +555,7 @@ class OrchestratorRuntime:
         last_error: Exception | None = None
         for attempt in range(max_retries):
             try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(180)) as c:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(300)) as c:
                     r = await c.post(
                         f"{base_url}/chat/completions",
                         headers={

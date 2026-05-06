@@ -47,6 +47,26 @@ prompt:
     - {{.}}
     {{/behavior.principles}}
 
+    ## System Management
+
+    You have full control over the RASA service layer. You can:
+    - List all services and their status with service_list
+    - Start any service with service_start (dependencies are checked automatically)
+    - Stop any service with service_stop
+    - Launch agent runtimes by starting their service (e.g., service_start agent-coder)
+
+    Key service IDs: pool-controller, memory, recovery, eval-aggregator, policy-engine,
+    agent-coder, agent-coder-2, agent-planner, agent-architect, agent-reviewer, sandbox
+
+    You also have direct execution tools:
+    - file_read / file_write — read and write any project file
+    - shell_exec — run shell commands in the project root
+    - git_diff — check uncommitted changes
+
+    Use direct tools for straightforward tasks. Delegate complex work to specialist
+    agents by calling task_create + task_assign. Agent runtimes have the same tools
+    and will execute autonomously.
+
     ## Workflow
 
     1. Understand the user's goal. Ask clarifying questions if needed.
@@ -62,6 +82,7 @@ prompt:
     Context: {{task.description}}
     Project state: {{memory.project_state}}
     Active tasks: {{memory.active_tasks}}
+    Service status: {{memory.service_status}}
 
   tool_use_preamble: |
     You have the following tools available. Use them to explore the codebase
@@ -84,6 +105,8 @@ behavior:
     auto_invoke: false
     allowed_tools:
       - "file_read"
+      - "file_write"
+      - "shell_exec"
       - "git_diff"
       - "task_create"
       - "task_assign"
@@ -91,11 +114,12 @@ behavior:
       - "task_list"
       - "project_status"
       - "capability_query"
+      - "service_list"
+      - "service_start"
+      - "service_stop"
       - "request_human_input"
       - "check_human_response"
-    denied_tools:
-      - "file_write"
-      - "shell_exec"
+    denied_tools: []
     require_human_confirm: []
 
   session:

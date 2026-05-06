@@ -152,4 +152,49 @@ ORCHESTRATOR_TOOL_DEFS = {
             },
         },
     },
+    "service_list": {
+        "type": "function",
+        "function": {
+            "name": "service_list",
+            "description": "List all RASA services and their current status (running/stopped/error). No arguments needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    "service_start": {
+        "type": "function",
+        "function": {
+            "name": "service_start",
+            "description": "Start a RASA service by its service ID. Dependencies are checked automatically. Service IDs include: pool-controller, memory, recovery, eval-aggregator, policy-engine, agent-coder, agent-coder-2, agent-planner, agent-architect, agent-reviewer, sandbox",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "service_id": {
+                        "type": "string",
+                        "description": "Service ID to start",
+                    },
+                },
+                "required": ["service_id"],
+            },
+        },
+    },
+    "service_stop": {
+        "type": "function",
+        "function": {
+            "name": "service_stop",
+            "description": "Stop a running RASA service by its service ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "service_id": {
+                        "type": "string",
+                        "description": "Service ID to stop",
+                    },
+                },
+                "required": ["service_id"],
+            },
+        },
+    },
 }

@@ -100,7 +100,7 @@ class TerminalPanel:
         """Send a command to the orchestrator and return the result."""
         try:
             base = self.api.base.rstrip("/")
-            async with httpx.AsyncClient(timeout=httpx.Timeout(180)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300)) as client:
                 resp = await client.post(
                     f"{base}/api/orchestrator/direct",
                     json={"message": cmd, "project_id": state.selected_project_id},

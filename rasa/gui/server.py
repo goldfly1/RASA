@@ -249,7 +249,13 @@ _orchestrator: OrchestratorRuntime | None = None
 def _get_orchestrator() -> OrchestratorRuntime:
     global _orchestrator
     if _orchestrator is None:
-        _orchestrator = OrchestratorRuntime()
+        _orchestrator = OrchestratorRuntime(
+            process_manager=process_manager,
+            health_cache=_health_cache,
+            health_cache_lock=_health_cache_lock,
+            service_map=service_map,
+            registry=registry,
+        )
     return _orchestrator
 
 
