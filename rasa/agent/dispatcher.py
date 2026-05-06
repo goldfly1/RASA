@@ -92,19 +92,65 @@ async def _call_llm(base_url, model, messages, temperature, max_tokens) -> dict:
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120)) as c:
-        r = await c.post(
-            f"{base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json=payload,
-        )
-        r.raise_for_status()
-        data = r.json()
-        return {
-            "content": data["choices"][0]["message"]["content"],
-            "model": data["model"],
-            "usage": data.get("usage", {}),
-        }
+    TRANSIENT = (429, 500, 502, 503)
+    max_retries = 3
+    last_error: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300)) as c:
+                r = await c.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                )
+                if r.status_code in TRANSIENT and attempt < max_retries - 1:
+                    body = ""
+                    try:
+                        body = r.text[:500]
+                    except Exception:
+                        pass
+                    wait = 2 ** attempt
+                    print(f"[dispatcher] LLM {r.status_code}, retrying in {wait}s "
+                          f"(attempt {attempt + 1}/{max_retries})  body={body}", flush=True)
+                    await asyncio.sleep(wait)
+                    continue
+                r.raise_for_status()
+                data = r.json()
+                return {
+                    "content": data["choices"][0]["message"]["content"],
+                    "model": data["model"],
+                    "usage": data.get("usage", {}),
+                }
+        except httpx.TimeoutException:
+            if attempt < max_retries - 1:
+                wait = 2 ** attempt
+                print(f"[dispatcher] LLM timeout, retrying in {wait}s "
+                      f"(attempt {attempt + 1}/{max_retries})", flush=True)
+                await asyncio.sleep(wait)
+                continue
+            raise RuntimeError("LLM call timed out after retries")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in TRANSIENT and attempt < max_retries - 1:
+                wait = 2 ** attempt
+                print(f"[dispatcher] LLM {e.response.status_code}, retrying in {wait}s "
+                      f"(attempt {attempt + 1}/{max_retries})", flush=True)
+                await asyncio.sleep(wait)
+                continue
+            detail = ""
+            try:
+                detail = f": {e.response.text[:500]}"
+            except Exception:
+                pass
+            raise RuntimeError(f"LLM call failed: {e.response.status_code}{detail}")
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                wait = 2 ** attempt
+                print(f"[dispatcher] LLM error: {e}, retrying in {wait}s "
+                      f"(attempt {attempt + 1}/{max_retries})", flush=True)
+                await asyncio.sleep(wait)
+                continue
+    raise RuntimeError(f"LLM call failed after {max_retries} retries: {last_error}")
 
 
 async def run_task(soul_id, task_id, goal, model_override, dry_run, one_shot) -> dict:
@@ -119,7 +165,18 @@ async def run_task(soul_id, task_id, goal, model_override, dry_run, one_shot) ->
                 if not row:
                     raise ValueError(f"Task {task_id} not found")
                 task = {"id": str(row[0]), "title": row[1], "description": row[2] or "", "type": (row[3] or {}).get("type", "generic"), "payload": row[3] or {}}
-                cur.execute("UPDATE tasks SET status = 'RUNNING', started_at = NOW() WHERE id = %s", (task_id,))
+                cur.execute(
+                    "UPDATE tasks SET status = 'RUNNING', started_at = NOW() "
+                    "WHERE id = %s AND status IN ('ASSIGNED', 'PENDING')",
+                    (task_id,),
+                )
+                if cur.rowcount == 0:
+                    # Another process already claimed this task — bail out
+                    cur.execute("SELECT status FROM tasks WHERE id = %s", (task_id,))
+                    row = cur.fetchone()
+                    print(f"[dispatcher] task {task_id[:12]} already claimed (status={row[0] if row else '?'}), exiting", flush=True)
+                    conn.commit()
+                    return {"task_id": task_id, "soul_id": soul_id, "skipped": True, "status": row[0] if row else 'gone'}
             else:
                 cur.execute(
                     "INSERT INTO tasks (title, description, payload, status, soul_id) VALUES (%s, %s, %s, 'RUNNING', %s) RETURNING id",
@@ -144,7 +201,19 @@ async def run_task(soul_id, task_id, goal, model_override, dry_run, one_shot) ->
     if dry_run:
         result = {"dry_run": True, "messages": messages, "model": model}
     else:
-        result = await _call_llm(base_url, model, messages, temperature, max_tokens)
+        try:
+            result = await _call_llm(base_url, model, messages, temperature, max_tokens)
+        except Exception as e:
+            print(f"[dispatcher] LLM call failed for task {task_id}: {e}", flush=True)
+            with _pg_conn("rasa_orch") as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE tasks SET status = 'FAILED', completed_at = NOW(), "
+                        "result = %s WHERE id = %s",
+                        (json.dumps({"error": str(e), "stage": "llm_call"}), task_id),
+                    )
+                conn.commit()
+            return {"task_id": task_id, "soul_id": soul_id, "error": str(e)}
 
     if not dry_run:
         with _pg_conn("rasa_orch") as conn:

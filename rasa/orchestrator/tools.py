@@ -31,7 +31,7 @@ ORCHESTRATOR_TOOL_DEFS = {
         "type": "function",
         "function": {
             "name": "task_assign",
-            "description": "Assign a PENDING task so an agent picks it up. Call this after task_create.",
+            "description": "Assign a PENDING task — the agent process is launched immediately. Call this after task_create.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -48,7 +48,7 @@ ORCHESTRATOR_TOOL_DEFS = {
         "type": "function",
         "function": {
             "name": "task_query",
-            "description": "Check the current status and result of a task.",
+            "description": "Check task status. Tasks run asynchronously — do NOT poll this repeatedly. Query once per turn at most.",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -154,11 +154,61 @@ def _spawn_one_shot(task_id: str, soul_id: str, goal: str | None = None) -> None
     env["RASA_DB_PASSWORD"] = os.environ.get("RASA_DB_PASSWORD", "")
     env.setdefault("RASA_MODEL", "deepseek-v4-pro:cloud")
     env.setdefault("OLLAMA_BASE_URL", os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"))
-    print(f"[pool] spawning {soul_id} for task {task_id[:12]}...", flush=True)
-    subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    log_dir = Path(__file__).parent.parent.parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / f"agent_{soul_id}_{task_id[:12]}.log"
+    print(f"[pool] spawning {soul_id} for task {task_id[:12]}... (log: {log_path})", flush=True)
+    with open(log_path, "w") as log:
+        subprocess.Popen(
+            cmd, env=env,
+            stdout=log, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
 
 
-async def _cleanup_stale_agents():
+async def _sweep_stale_assignments():
+    """Pick up existing ASSIGNED tasks on startup with rate limiting."""
+    try:
+        with _pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id::text, soul_id FROM tasks WHERE status = 'ASSIGNED' ORDER BY created_at ASC"
+                )
+                stale = cur.fetchall()
+                if stale:
+                    print(f"[pool] sweeping {len(stale)} stale ASSIGNED tasks (rate-limited)", flush=True)
+                    for i, (task_id, soul_id) in enumerate(stale):
+                        print(f"[pool]   reaping stale task {task_id[:12]}... ({soul_id})", flush=True)
+                        _spawn_one_shot(task_id, soul_id)
+                        if i > 0 and i % 3 == 0:
+                            await asyncio.sleep(2)  # rate limit: 3 tasks per batch
+                else:
+                    print("[pool] no stale ASSIGNED tasks", flush=True)
+    except Exception as e:
+        print(f"[pool] sweep error: {e}", flush=True)
+
+
+async def _sweep_stale_tasks():
+    """Periodically mark RUNNING tasks as FAILED if they've been running too long."""
+    max_runtime = int(os.environ.get("RASA_MAX_TASK_RUNTIME", "1800"))  # 30 min default
+    result_json = json.dumps({"error": "timed_out", "detail": f"Task RUNNING for over {max_runtime}s without completion"})
+    while True:
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE tasks SET status = 'FAILED', completed_at = NOW(), result = %s "
+                        "WHERE status = 'RUNNING' "
+                        "AND started_at IS NOT NULL "
+                        "AND EXTRACT(EPOCH FROM (NOW() - started_at)) > %s",
+                        (result_json, max_runtime),
+                    )
+                    if cur.rowcount:
+                        print(f"[pool] timed out {cur.rowcount} stale RUNNING task(s)", flush=True)
+                    conn.commit()
+        except Exception as e:
+            print(f"[pool] stale-task sweep error: {e}", flush=True)
+        await asyncio.sleep(60)  # check every minute
     """Periodically prune expired agent entries."""
     while True:
         await asyncio.sleep(15)
@@ -187,7 +237,13 @@ async def main():
     # Start listeners
     loop = asyncio.get_running_loop()
     loop.create_task(_handle_raw_notify(pg_conn))
-    loop.create_task(_cleanup_stale_agents())
+    loop.create_task(_sweep_stale_tasks())
+
+    # Sweep stale ASSIGNED tasks so they don't get orphaned
+    try:
+        await _sweep_stale_assignments()
+    except Exception as e:
+        print(f"[pool] startup sweep failed: {e}", flush=True)
 
     print("[pool] listening on tasks_assigned (PG) + agents.heartbeat.* (Redis)", flush=True)
     print(f"[pool] {len(_live_agents)} agents tracked", flush=True)

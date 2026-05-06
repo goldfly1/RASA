@@ -112,6 +112,20 @@ class ApiClient:
             payload["mode"] = mode
         return await self._post("/api/orchestrator/send", payload)
 
+    async def orchestrator_send_direct(
+        self,
+        message: str,
+        project_id: str | None = None,
+        mode: str | None = None,
+    ) -> ApiResult:
+        """Send a message directly to the OrchestratorRuntime (not file relay)."""
+        payload = {"message": message}
+        if project_id:
+            payload["project_id"] = project_id
+        if mode:
+            payload["mode"] = mode
+        return await self._post("/api/orchestrator/direct", payload)
+
     async def reset_orchestrator(self) -> ApiResult:
         return await self._post("/api/orchestrator/reset")
 

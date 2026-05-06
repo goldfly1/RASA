@@ -12,6 +12,7 @@ from rasa.gui_nice.projects_panel import ProjectsPanel
 from rasa.gui_nice.agents_panel import AgentsPanel
 from rasa.gui_nice.traces_panel import TracesPanel
 from rasa.gui_nice.reviews_panel import ReviewsPanel
+from rasa.gui_nice.terminal_panel import TerminalPanel
 
 
 def create(api: ApiClient) -> None:
@@ -33,6 +34,7 @@ def create(api: ApiClient) -> None:
         ui.tab("Agents", icon="smart_toy")
         ui.tab("Traces", icon="timeline")
         ui.tab("Reviews", icon="rate_review")
+        ui.tab("Terminal", icon="terminal")
 
     # ── Tab panels ──
     with ui.tab_panels(tabs, value="Overview").classes('w-full'):
@@ -48,6 +50,8 @@ def create(api: ApiClient) -> None:
             TracesPanel(api).build()
         with ui.tab_panel("Reviews"):
             ReviewsPanel(api).build()
+        with ui.tab_panel("Terminal"):
+            TerminalPanel(api).build()
 
     # ── Footer ──
     with ui.footer().classes('bg-surface border-custom items-center px-4 py-1'):

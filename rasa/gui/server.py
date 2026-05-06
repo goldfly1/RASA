@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -292,6 +292,87 @@ async def orchestrator_send(request):
     )
 
 
+async def orchestrator_direct(request):
+    """Call OrchestratorRuntime.send_message() directly (not file relay)."""
+    body = await request.json()
+    message = body.get("message", "").strip()
+    if not message:
+        return JSONResponse({"error": "Message is required"}, status_code=400)
+    project_id = body.get("project_id")
+    mode = body.get("mode")
+
+    orch = _get_orchestrator()
+    if project_id:
+        orch.set_project(project_id)
+    if mode:
+        orch.set_mode(mode)
+
+    try:
+        result = await orch.send_message(message)
+        return JSONResponse(result)
+    except Exception as e:
+        print(f"ERROR in orchestrator_direct: {type(e).__name__}: {e}", flush=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def orchestrator_direct_stream(request):
+    """SSE streaming endpoint for OrchestratorRuntime.send_message()."""
+    body = await request.json()
+    message = body.get("message", "").strip()
+    if not message:
+        return JSONResponse({"error": "Message is required"}, status_code=400)
+    project_id = body.get("project_id")
+    mode = body.get("mode")
+
+    orch = _get_orchestrator()
+    if project_id:
+        orch.set_project(project_id)
+    if mode:
+        orch.set_mode(mode)
+
+    async def event_generator():
+        try:
+            async def emit(event: dict):
+                sse = f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+                yield sse
+
+            # Wrapper that yields SSE-formatted bytes via the emit closure
+            async def on_event(evt: dict):
+                sse = f"event: {evt['type']}\ndata: {json.dumps(evt)}\n\n"
+                # We can't yield from a callback, so we push into a queue
+                await _stream_queue.put(sse)
+
+            _stream_queue: asyncio.Queue = asyncio.Queue()
+            _stream_task = asyncio.create_task(orch.send_message(message, on_event=on_event))
+
+            # Yield events as they arrive
+            while True:
+                try:
+                    sse = await asyncio.wait_for(_stream_queue.get(), timeout=300)
+                    yield sse.encode("utf-8")
+                    if '"type": "done"' in sse:
+                        break
+                except asyncio.TimeoutError:
+                    yield f"event: error\ndata: {json.dumps({'type': 'error', 'text': 'Response timed out'})}\n\n".encode("utf-8")
+                    break
+
+            # Ensure task completed
+            await _stream_task
+        except Exception as e:
+            print(f"ERROR in orchestrator_direct_stream: {type(e).__name__}: {e}", flush=True)
+            yield f"event: error\ndata: {json.dumps({'type': 'error', 'text': str(e)})}\n\n".encode("utf-8")
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 async def orchestrator_reset(request):
     _get_orchestrator().reset()
     return JSONResponse({"status": "reset"})
@@ -467,6 +548,8 @@ routes = [
     Route("/api/chat/reset", chat_reset, methods=["POST"]),
     Route("/api/chat/souls", chat_souls),
     Route("/api/orchestrator/send", orchestrator_send, methods=["POST"]),
+    Route("/api/orchestrator/direct", orchestrator_direct, methods=["POST"]),
+    Route("/api/orchestrator/direct/stream", orchestrator_direct_stream, methods=["POST"]),
     Route("/api/orchestrator/reset", orchestrator_reset, methods=["POST"]),
     Route("/api/orchestrator/tasks", orchestrator_tasks),
     Route("/api/orchestrator/projects", orchestrator_projects),
