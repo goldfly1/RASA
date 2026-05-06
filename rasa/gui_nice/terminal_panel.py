@@ -172,7 +172,7 @@ class TerminalPanel:
 
         # Show final orchestrator response
         if reply:
-            self._entry("orch", reply[:2000] + ("…" if len(reply) > 2000 else ""))
+            self._entry("orch", reply)
 
         usage = data.get("usage", {})
         elapsed = data.get("elapsed_seconds", 0)
