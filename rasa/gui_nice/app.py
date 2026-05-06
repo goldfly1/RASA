@@ -19,22 +19,22 @@ def create(api: ApiClient) -> None:
     """Build the full dashboard UI."""
     theme.apply()
 
-    # ── Header ──
+    # ── Header with fixed tabs ──
     with ui.header(elevated=True).classes('items-center px-4 py-2'):
-        ui.label("RASA Command Center").classes('text-xl font-bold')
-        ui.space()
-        status_label = ui.label("Connecting...").classes('text-dim text-sm mono')
-        ui.icon("cloud", color=theme.DIM).props("size=18px")
+        with ui.row().classes('w-full items-center'):
+            ui.label("RASA Command Center").classes('text-xl font-bold')
+            ui.space()
+            status_label = ui.label("Connecting...").classes('text-dim text-sm mono')
+            ui.icon("cloud", color=theme.DIM).props("size=18px")
 
-    # ── Tabs ──
-    with ui.tabs().classes('w-full') as tabs:
-        ui.tab("Overview", icon="dashboard")
-        ui.tab("Services", icon="health_and_safety")
-        ui.tab("Projects", icon="folder")
-        ui.tab("Agents", icon="smart_toy")
-        ui.tab("Traces", icon="timeline")
-        ui.tab("Reviews", icon="rate_review")
-        ui.tab("Terminal", icon="terminal")
+        with ui.tabs().classes('w-full') as tabs:
+            ui.tab("Overview", icon="dashboard")
+            ui.tab("Services", icon="health_and_safety")
+            ui.tab("Projects", icon="folder")
+            ui.tab("Agents", icon="smart_toy")
+            ui.tab("Traces", icon="timeline")
+            ui.tab("Reviews", icon="rate_review")
+            ui.tab("Terminal", icon="terminal")
 
     # ── Tab panels ──
     with ui.tab_panels(tabs, value="Overview").classes('w-full'):

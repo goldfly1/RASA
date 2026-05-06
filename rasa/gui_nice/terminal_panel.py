@@ -40,8 +40,8 @@ class TerminalPanel:
                 self._project_label = ui.label().classes("text-dim text-xs mono")
 
             # Scrollable agent activity tree
-            self._tree = ui.column().classes("w-full gap-0 p-2").style(
-                "max-height:68vh; overflow-y:auto; "
+            self._tree = ui.column().classes("w-full gap-0 p-2 terminal-tree").style(
+                "height:calc(100vh - 160px); overflow-y:auto; overflow-x:hidden; "
                 "background:#0d1117; border-radius:4px; "
                 "font-family:Consolas,'Courier New',monospace; font-size:13px;"
             )
@@ -95,6 +95,17 @@ class TerminalPanel:
                     d, position="top-right", multi_line=True, timeout=8000
                 ))
                 row.classes("cursor-pointer")
+
+        # Auto-scroll the tree to bottom (skip during build, no client yet)
+        try:
+            ui.run_javascript(
+                "setTimeout(() => {"
+                "  const el = document.querySelector('.terminal-tree');"
+                "  if (el) el.scrollTop = el.scrollHeight;"
+                "}, 50)"
+            )
+        except Exception:
+            pass
 
     async def _run_orch(self, cmd: str) -> dict | None:
         """Send a command to the orchestrator and return the result."""
@@ -177,5 +188,16 @@ class TerminalPanel:
         usage = data.get("usage", {})
         elapsed = data.get("elapsed_seconds", 0)
         self._entry("info", f"done — {elapsed}s · {usage.get('prompt_tokens', 0)}↑ {usage.get('completion_tokens', 0)}↓")
+
+        # Force scroll to bottom after response
+        try:
+            ui.run_javascript(
+                "setTimeout(() => {"
+                "  const el = document.querySelector('.terminal-tree');"
+                "  if (el) el.scrollTop = el.scrollHeight;"
+                "}, 100)"
+            )
+        except Exception:
+            pass
 
         self._ready = True

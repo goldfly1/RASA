@@ -157,27 +157,17 @@ class OrchestratorRuntime:
             for r in pending_reviews:
                 lines.append(f"- Review {r['id'][:8]}...: {r['reason'][:120]}")
             task_ctx += "\n\n## Pending Human Reviews\n" + "\n".join(lines)
-        # Build service status string
+        # Build service status string (read-only snapshot of health cache)
+        cache = self._health_cache if isinstance(self._health_cache, dict) else {}
         svc_lines = []
-        if self._health_cache_lock:
-            import asyncio
-            async def _read_cache():
-                async with self._health_cache_lock:
-                    return dict(self._health_cache)
-            try:
-                cache = asyncio.get_event_loop().run_until_complete(_read_cache())
-            except Exception:
-                cache = self._health_cache
-        else:
-            cache = self._health_cache if isinstance(self._health_cache, dict) else {}
         for sid, info in cache.items():
             st = info.get("status", "unknown")
             if st == "running":
-                svc_lines.append(f"  {sid}: ✅ running")
+                svc_lines.append(f"  {sid}: RUNNING")
             elif st == "error":
-                svc_lines.append(f"  {sid}: ❌ error")
+                svc_lines.append(f"  {sid}: ERROR")
             else:
-                svc_lines.append(f"  {sid}: ⬜ {st}")
+                svc_lines.append(f"  {sid}: {st.upper()}")
         service_status = "\n".join(svc_lines) if svc_lines else "Service cache not yet initialized."
         return _render_system_prompt(self.soul, summary, task_ctx, caps, service_status)
 
@@ -626,6 +616,21 @@ class OrchestratorRuntime:
             self._messages.insert(0, {"role": "system", "content": system})
 
         self._messages.append({"role": "user", "content": text})
+
+        # Trim conversation history: keep system + last 10 turns (20 messages)
+        # to prevent unbounded context growth
+        MAX_HISTORY = 20  # total non-system messages to keep
+        non_system = [m for m in self._messages if m["role"] != "system"]
+        if len(non_system) > MAX_HISTORY:
+            to_remove = len(non_system) - MAX_HISTORY
+            removed = 0
+            i = 1  # skip system at [0]
+            while i < len(self._messages) and removed < to_remove:
+                if self._messages[i]["role"] != "system":
+                    self._messages.pop(i)
+                    removed += 1
+                else:
+                    i += 1
 
         # Model config — canonical pattern: ollama launch claude --model deepseek-v4-pro:cloud
         model_cfg = self.soul.get("model", {})
