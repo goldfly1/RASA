@@ -1,0 +1,14 @@
+deny_patterns:
+- '**/*.exe'
+- '**/*.dll'
+- '**/*.pdb'
+description: Strict scanner for coder role — type-checks, test coverage, production-ready
+  code
+ignore_patterns:
+- '**/__pycache__/**'
+- '**/.pytest_cache/**'
+- '**/*.pyc'
+rules:
+  strict_typing: true
+  test_coverage: true
+semgrep_config: p/python

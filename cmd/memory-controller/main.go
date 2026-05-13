@@ -18,6 +18,8 @@ func main() {
 	dsn := flag.String("db", "", "PostgreSQL DSN for rasa_memory (default: env-based)")
 	redisAddr := flag.String("redis", "localhost:6379", "Redis address")
 	httpAddr := flag.String("http", "127.0.0.1:8300", "HTTP listen address")
+	ollamaURL := flag.String("ollama", "http://127.0.0.1:11434/v1", "Ollama base URL for embeddings")
+	embedModel := flag.String("embed-model", "nomic-embed-text", "Embedding model name")
 	flag.Parse()
 
 	if *dsn == "" {
@@ -26,22 +28,34 @@ func main() {
 
 	log.Printf("memory-controller starting db=%s redis=%s http=%s", *dsn, *redisAddr, *httpAddr)
 
-	// Session store (Redis) — fatal if unavailable
+	// Session store (Redis)
 	store, err := memory.NewSessionStore(*redisAddr)
 	if err != nil {
 		log.Fatalf("memory-controller: redis: %v", err)
 	}
 	defer store.Close()
 
-	// Canonical store (PostgreSQL) — fatal if unavailable
+	// Canonical store (PostgreSQL)
 	canonical, err := memory.NewCanonicalStore(*dsn)
 	if err != nil {
 		log.Fatalf("memory-controller: canonical: %v", err)
 	}
 	defer canonical.Close()
 
-	// Context assembler — the HTTP API
-	assembler := memory.NewContextAssembler(store, canonical)
+	// Vector store (PostgreSQL pgvector)
+	vector, err := memory.NewVectorStore(*dsn)
+	if err != nil {
+		log.Printf("memory-controller: WARNING vector store unavailable: %v", err)
+		vector = nil
+	} else {
+		defer vector.Close()
+	}
+
+	// Embedder (Ollama)
+	embedder := memory.NewOllamaEmbedder(*ollamaURL, *embedModel)
+
+	// Context assembler
+	assembler := memory.NewContextAssembler(store, canonical, vector, embedder)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/assemble", assembler.AssembleHTTP)
@@ -54,7 +68,7 @@ func main() {
 		Addr:         *httpAddr,
 		Handler:      mux,
 		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  30 * time.Second,
 	}
 

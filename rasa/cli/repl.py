@@ -297,7 +297,7 @@ def _dispatch_slash(session: ReplSession, line: str) -> bool:
 
 
 def _print_thinking() -> None:
-    print("  ...", end="", flush=True)
+    print("fixed")
 
 
 def _print_response(result: dict, duration: float) -> None:

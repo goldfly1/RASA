@@ -93,6 +93,14 @@ func cmdSubmit() {
 	}
 	log.Printf("created task %s (correlation=%s, soul=%s)", taskID[:8], correlationID[:8], *soulID)
 
+	// Set status to ASSIGNED so the agent dispatcher can pick it up
+	_, err = pgDB.ExecContext(context.Background(),
+		`UPDATE tasks SET status = 'ASSIGNED', assigned_at = NOW(), assigned_agent_id = $1 WHERE id = $2`,
+		*soulID, taskID)
+	if err != nil {
+		log.Fatalf("assign task: %v", err)
+	}
+
 	pgPub, err := bus.NewPGPub(dsn)
 	if err != nil {
 		log.Fatalf("pg pub: %v", err)

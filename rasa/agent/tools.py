@@ -3,9 +3,11 @@
 These are the low-level tools agents use to interact with the codebase:
 file_read, file_write, shell_exec, git_diff, and human interaction tools.
 """
+# Hello from RASA
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import os
 import subprocess
 from pathlib import Path
@@ -154,7 +156,17 @@ async def tool_file_write(path: str, content: str) -> dict:
                 return {"error": f"Cannot write to protected path: {path}"}
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(content, encoding="utf-8")
-        return {"success": True, "path": path, "bytes": len(content)}
+        result = {"success": True, "path": path, "bytes": len(content)}
+
+        # Run security scanners on the written file
+        try:
+            from rasa.sandbox.scanner import scan_file
+            scan_result = scan_file(str(full))
+            result["security_scan"] = scan_result
+        except Exception:
+            pass  # scanner is best-effort
+
+        return result
     except PermissionError as e:
         return {"error": str(e)}
     except Exception as e:

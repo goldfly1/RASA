@@ -5,11 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 import psycopg
-from psycopg_pool import ConnectionPool
+try:
+    from psycopg_pool import ConnectionPool
+except ImportError:
+    ConnectionPool = None  # type: ignore[assignment,misc]
 
 
 async def upsert_embedding(
-    pool: ConnectionPool,
+    pool: "ConnectionPool",
     node_id: str,
     model: str,
     chunk_index: int,
@@ -31,7 +34,7 @@ async def upsert_embedding(
 
 
 async def semantic_search(
-    pool: ConnectionPool,
+    pool: "ConnectionPool",
     query_embedding: list[float],
     k: int = 5,
     model_filter: str | None = None,

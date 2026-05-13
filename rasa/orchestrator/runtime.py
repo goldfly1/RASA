@@ -23,7 +23,6 @@ from rasa.orchestrator.tools import ORCHESTRATOR_TOOL_DEFS
 SOULS_DIR = Path(__file__).parent.parent.parent / "souls"
 PROJECT_ROOT = SOULS_DIR.parent
 VENV_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
-MAX_TOOL_TURNS = 10
 
 
 # ── Soul loading (same pattern as chat.py) ──
@@ -110,7 +109,7 @@ class OrchestratorRuntime:
         self.review_mgr = ReviewManager()
         self._messages: list[dict] = []
         self._project_id: str | None = None
-        self._mode: str = "step_by_step"  # or "autonomous"
+        self._mode: str = "autonomous"  # or "step_by_step"
         # Service management (set by server.py)
         self.process_manager = process_manager
         self._health_cache = health_cache or {}
@@ -645,9 +644,11 @@ class OrchestratorRuntime:
         total_prompt_tokens = 0
         total_completion_tokens = 0
 
-        for turn in range(MAX_TOOL_TURNS):
+        turn = 0
+        while True:
+            turn += 1
             if on_event:
-                await on_event({"type": "thinking", "model": model, "turn": turn + 1, "elapsed": round(time.time() - start, 1)})
+                await on_event({"type": "thinking", "model": model, "turn": turn, "elapsed": round(time.time() - start, 1)})
 
             payload: dict[str, Any] = {
                 "model": model,
@@ -684,6 +685,7 @@ class OrchestratorRuntime:
                     "elapsed_seconds": round(elapsed, 1),
                     "project_id": self._project_id,
                     "mode": self._mode,
+                    "tool_calls": len(steps),
                 }
                 if on_event:
                     await on_event({"type": "reply", "text": reply, "result": result})
@@ -729,27 +731,6 @@ class OrchestratorRuntime:
                     "tool_call_id": tc["id"],
                     "content": result_text,
                 })
-
-        # MAX_TOOL_TURNS fallback
-        reply = "I've reached the tool operation limit. Let me summarize what I've done."
-        self._messages.append({"role": "assistant", "content": reply})
-        elapsed = time.time() - start
-        result = {
-            "reply": reply,
-            "steps": steps,
-            "model": model,
-            "usage": {
-                "prompt_tokens": total_prompt_tokens,
-                "completion_tokens": total_completion_tokens,
-            },
-            "elapsed_seconds": round(elapsed, 1),
-            "project_id": self._project_id,
-            "mode": self._mode,
-        }
-        if on_event:
-            await on_event({"type": "reply", "text": reply, "result": result})
-            await on_event({"type": "done", "result": result})
-        return result
 
     def reset(self) -> None:
         self._messages = []

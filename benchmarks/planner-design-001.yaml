@@ -1,0 +1,18 @@
+benchmark_id: planner-design-001
+expected_patterns:
+- cache
+- architecture
+- tradeoff
+- component
+forbidden_patterns:
+- TODO
+- TBD
+- not sure
+input_prompt: Design a caching layer for a Python web app. Describe the architecture,
+  key components, and tradeoffs.
+name: Planner design task
+scoring:
+  lint_pass_weight: 0.3
+  min_passing_score: 0.6
+  pattern_match_weight: 0.7
+soul_id: planner-v1

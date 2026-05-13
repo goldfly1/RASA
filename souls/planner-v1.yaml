@@ -1,7 +1,7 @@
 soul_version: "1.0.0"
 soul_id: "planner-v1"
 agent_role: PLANNER
-inherits: ~
+inherits: "base-v1"
 
 metadata:
   name: "Technical Planner"

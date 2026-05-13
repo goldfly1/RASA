@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "mode": "bypass",
+    "allow": [
+      "Bash(where *)"
+    ]
+  }
+}

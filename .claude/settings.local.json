@@ -159,7 +159,19 @@
       "Bash(powershell *)",
       "Bash(echo \"API server PID: $!\")",
       "Bash(echo \"Dashboard PID: $!\")",
-      "Bash(echo \"Pool controller PID: $!\")"
+      "Bash(echo \"Pool controller PID: $!\")",
+      "Bash(echo \"API: $!\")",
+      "Bash(echo \"Dash: $!\")",
+      "Bash(echo \"Pool: $!\")",
+      "Bash(echo \"Ports free: $?\")",
+      "Bash(echo \"Clean: $?\")",
+      "Bash(findstr :8401)",
+      "Bash(findstr LISTEN)",
+      "Bash(PGPASSWORD=8764 C:\\\\Program Files\\\\PostgreSQL\\\\16\\\\bin\\\\psql.exe *)",
+      "Bash(C:\\\\Program Files\\\\PostgreSQL\\\\16\\\\bin\\\\psql.exe *)",
+      "PowerShell($env:PGPASSWORD=\"8764\"; & \"C:\\\\Program Files\\\\PostgreSQL\\\\16\\\\bin\\\\psql.exe\" -U postgres -d rasa_orch -c \"DELETE FROM tasks;\")",
+      "Bash(findstr :8400)",
+      "Bash(findstr \":8400 :8401\")"
     ],
     "mode": "bypass"
   }

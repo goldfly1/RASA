@@ -1,51 +1,56 @@
-# RASA Hermes Context
+﻿# Repository Guidelines
 
-## Role
-You are the **Orchestrator** for RASA (Reliable Autonomous System of Agents).  
-You run inside WSL, control the system architecture, and dispatch execution to Windows-side workers.
+## Project Structure & Module Organization
 
-## Hardware
-- Windows 11, Intel Ultra 7 255, 64GB RAM, RTX 5060 8GB (Blackwell)
-- PostgreSQL 18 on Windows (port 5432, password in env)
-- Ollama gateway at `http://127.0.0.1:11434/v1`
-- Go 1.26.2, Redis 3.0.504, Python 3.13.6
+```
+rasa/          Python package — agent runtime, LLM gateway, pool controller, DB, GUI
+cmd/           Go service stubs for control-plane binaries (orchestrator, pool-controller, etc.)
+config/        YAML configuration (gateway.yaml, pool.yaml, nats-server.conf)
+souls/         Agent soul sheets in YAML — system_template, model, tool_policy per role
+migrations/    Numbered PostgreSQL migrations (001–110) covering orch, pool, policy, memory, eval
+scripts/       PowerShell helpers for Windows setup, schema bootstrap, and lore ingestion
+tests/         pytest suite — smoke, bus, LLM gateway (test_*.py, run with pytest)
+benchmarks/    Performance benchmarks; schema/ — architecture docs; docs/ — design notes
+```
 
-## Repository Layout
-- `rasa/`          — Python package (orchestrator logic, LLM gateway, pool, agents)
-- `cmd/*/main.go`  — Go service stubs (compiled when Go is available)
-- `config/`        — `gateway.yaml`, `pool.yaml`, `nats-server.conf`
-- `souls/`         — `coder-v2-dev.yaml`, `reviewer-v1.yaml`, `planner-v1.yaml`, `architect-v1.yaml`
-- `migrations/`    — PostgreSQL schema (001 → 060)
-- `scripts/`       — PowerShell helpers (`setup_windows.ps1`, `create_databases.ps1`, `bootstrap_schema.ps1`)
-- `Procfile`       — Service definitions (Redis, Go binaries, Python workers)
+## Build, Test, and Development Commands
 
-## Current Phase
-**Phase 1** — LLM Gateway + Agent Dispatch + Policy Skeleton  
-Do NOT spend time explaining Phase 2–4 unless asked.
+| Command | Purpose |
+|---------|---------|
+| `pip install -e ".[dev]"` | Install the Python package with dev extras (ruff, mypy, pytest-cov) |
+| `pytest tests/ -v` | Run the full test suite (requires PostgreSQL and `RASA_DB_PASSWORD`) |
+| `ruff check rasa/ tests/` | Lint Python source (line-length 120, py312 target) |
+| `mypy rasa/` | Type-check under strict mode |
+| `go build ./cmd/.../` | Compile all Go control-plane binaries |
+| `powershell -File scripts/bootstrap_schema.ps1` | Apply all PostgreSQL migrations |
+
+## Coding Style & Naming Conventions
+
+- **Python**: ruff (line-length 120), mypy strict. Use `from __future__ import annotations` in all modules.
+- **Naming**: `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_CASE` for constants.
+- **Go**: standard `gofmt` style; one package per `cmd/<service>/main.go`.
+- **SQL migrations**: numbered sequentially (`NNN_description.sql`), idempotent where practical.
+- Prefer `structlog` for structured logging; `pydantic` for model validation.
+
+## Testing Guidelines
+
+- Framework: `pytest` + `pytest-asyncio` (all tests async by default).
+- Naming: `test_<module>.py` with `test_<behavior>` function names.
+- Smoke test (`tests/test_smoke.py`) is the integration checkpoint—run it after schema changes.
+- PowerShell smoke script (`tests/smoke_dispatcher.ps1`) tests the dispatcher from Windows side.
+- No coverage target enforced yet; use `pytest --cov=rasa` optionally.
+
+## Commit & Pull Request Guidelines
+
+- **Commit style**: imperative mood, capitalized first word, no trailing period.
+  - Good: `Add capability_query tool for dynamic agent discovery`
+  - Good: `Fix orchestrator 500 errors with LLM retry logic`
+- **Gates**: Phase 1 implementation followed numbered gates; reference the gate in the body if applicable.
+- **PRs**: link to the issue if one exists. Describe what changed and why. Note any new env vars or schema migrations.
 
 ## Key Patterns
-- **DB as bus**: PostgreSQL `rasa_orch.tasks` is the job queue.
-- **Windows workers invoked via**:
-  `powershell.exe -Command "C:\Users\goldf\rasa\.venv\Scripts\python.exe -m rasa.agent.dispatcher --soul <soul> --task-id <uuid> [--one-shot]"`
-- **Soul sheets**: YAML files with `system_template`, `context_injection`, `tool_policy`, `model` block.
-- **Environment**: `RASA_DB_PASSWORD` must be set from WSL when calling Windows Python.
 
-## What to do when asked
-1. Check existing files before writing new ones.
-2. Commit early (`git add -A && git commit -m "..."`).
-3. Use `powershell.exe` or write `.ps1` scripts for Windows-side execution.
-4. Prefer PostgreSQL over files for durable state; use filesystem only for checkpoints / build artifacts.
-5. When patching, include enough surrounding context to make the match unique.
-
-## Files you should know
-| File | Purpose |
-|------|---------|
-| `rasa/db/conn.py` | psycopg ConnectionPool wrapper |
-| `rasa/llm_gateway/client.py` | `GatewayClient.complete()` — Ollama/OpenAI API |
-| `rasa/agent/dispatcher.py` | `run_task()`, `daemon_loop()` — agent entrypoint |
-| `rasa/pool/controller.py` | `PoolController` — WSL-side spawn + heartbeat polling |
-| `config/gateway.yaml` | LLM tier routing (ollama → `gemma4:31b-cloud`, `kimi-k2.6:cloud`) |
-| `config/pool.yaml` | Agent sizing (2 coder replicas, 1 each reviewer/planner/architect) |
-| `migrations/010_rasa_orch.sql` | `tasks`, `task_dependencies`, `checkpoint_refs` |
-| `migrations/020_rasa_pool.sql` | `agents`, `heartbeats`, `backpressure_events` |
-| `migrations/030_rasa_policy.sql` | `policy_rules`, `audit_log`, `human_reviews` |
+- **DB as bus**: PostgreSQL `rasa_orch.tasks` is the durable job queue. Use `LISTEN/NOTIFY` for push and `SELECT FOR UPDATE SKIP LOCKED` for agent polling.
+- **Windows invocation**: agents run via `powershell.exe -Command "python -m rasa.agent.dispatcher --soul <name> --task-id <uuid>"`.
+- **Soul sheets**: every agent role has a YAML soul in `souls/` with `system_template`, `context_injection`, `tool_policy`, and a `model` block.
+- **Environment**: `RASA_DB_PASSWORD` must be set. See `.env.example` for all required variables.

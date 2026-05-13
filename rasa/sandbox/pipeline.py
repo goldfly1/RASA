@@ -47,6 +47,26 @@ class SandboxPipeline:
         self.working_dir = Path(working_dir or os.getcwd())
         self._running = False
 
+    async def _reap_orphans(self, max_age_minutes: int = 30) -> None:
+        """Background task: delete sandbox dirs older than max_age_minutes."""
+        while self._running:
+            try:
+                now = time.monotonic()
+                for sandbox_dir in self.data_dir.iterdir():
+                    if not sandbox_dir.is_dir():
+                        continue
+                    try:
+                        mtime = sandbox_dir.stat().st_mtime
+                        age_minutes = (now - mtime) / 60
+                        if age_minutes > max_age_minutes:
+                            shutil.rmtree(sandbox_dir, ignore_errors=True)
+                            print(f"[sandbox] reaped orphan: {sandbox_dir.name} ({age_minutes:.0f}m old)", flush=True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            await asyncio.sleep(300)
+
     async def start(self, dbname: str = "rasa_orch") -> None:
         self._running = True
 
@@ -59,8 +79,16 @@ class SandboxPipeline:
         await self._pg_pub.setup()
 
         print("[sandbox] listening on sandbox_execute")
-        while self._running:
-            await asyncio.sleep(1)
+        reaper_task = asyncio.create_task(self._reap_orphans())
+        try:
+            while self._running:
+                await asyncio.sleep(1)
+        finally:
+            reaper_task.cancel()
+            try:
+                await reaper_task
+            except asyncio.CancelledError:
+                pass
 
     async def _handle_execute(self, env: Envelope) -> None:
         task_id = env.metadata.task_id

@@ -17,13 +17,13 @@ class TestTierRouter:
         r = TierRouter()
         prov, model = r.resolve("standard")
         assert prov == "ollama"
-        assert model == "Deepseek-v4-flash:cloud"
+        assert model == "deepseek-v4-pro:cloud"
 
     def test_resolve_premium(self):
         r = TierRouter()
         prov, model = r.resolve("premium")
         assert prov == "ollama"
-        assert model == "Deepseek-v4-pro:cloud"
+        assert model == "deepseek-v4-pro:cloud"
 
     def test_resolve_unknown_tier_falls_back(self):
         r = TierRouter()
@@ -35,7 +35,7 @@ class TestTierRouter:
         r = TierRouter()
         prov, model = r.resolve(None)
         assert prov == "ollama"
-        assert model == "Deepseek-v4-flash:cloud"
+        assert model == "deepseek-v4-pro:cloud"
 
     def test_tiers_list(self):
         r = TierRouter()
@@ -155,7 +155,7 @@ class TestGatewayClient:
 
         # Pre-populate cache
         r = await client._ensure_redis()
-        cache_key = _cache_key("cached_prompt", "Deepseek-v4-flash:cloud", None, None)
+        cache_key = _cache_key("cached_prompt", "deepseek-v4-pro:cloud", None, None)
         await r.setex(
             f"llm_cache:{cache_key}",
             60,
@@ -184,7 +184,7 @@ class TestGatewayClient:
 
         # Pre-populate — seed should ignore it
         r = await client._ensure_redis()
-        key = _cache_key("seed_prompt", "Deepseek-v4-flash:cloud", 0.0, 100)
+        key = _cache_key("seed_prompt", "deepseek-v4-pro:cloud", 0.0, 100)
         await r.setex(f"llm_cache:{key}", 60, json.dumps({"content": "stale"}))
 
         try:
@@ -203,13 +203,13 @@ class TestEnvVarResolution:
     def test_default_used_when_var_unset(self, monkeypatch):
         monkeypatch.delenv("RASA_DEFAULT_MODEL", raising=False)
         from rasa.llm_gateway.router import _resolve_env
-        result = _resolve_env("${RASA_DEFAULT_MODEL:-Deepseek-v4-flash:cloud}")
-        assert result == "Deepseek-v4-flash:cloud"
+        result = _resolve_env("${RASA_DEFAULT_MODEL:-deepseek-v4-pro:cloud}")
+        assert result == "deepseek-v4-pro:cloud"
 
     def test_env_var_overrides_default(self, monkeypatch):
         monkeypatch.setenv("RASA_DEFAULT_MODEL", "custom-model:cloud")
         from rasa.llm_gateway.router import _resolve_env
-        result = _resolve_env("${RASA_DEFAULT_MODEL:-Deepseek-v4-flash:cloud}")
+        result = _resolve_env("${RASA_DEFAULT_MODEL:-deepseek-v4-pro:cloud}")
         assert result == "custom-model:cloud"
 
     def test_bare_env_var_no_default(self, monkeypatch):

@@ -26,18 +26,21 @@ class OverviewPanel:
         ui.timer(10.0, self._refresh)
 
     def _build_metric_row(self):
-        with ui.row().classes('w-full gap-4'):
-            self._cards["services"] = self._metric_card(
-                "Services", "?", "Total monitored services"
+        with ui.row().classes('w-full gap-4 flex-wrap'):
+            self._cards["tasks_done"] = self._metric_card(
+                "Tasks Done", "?", "Completed (24h)"
             )
-            self._cards["running"] = self._metric_card(
-                "Running", "?", "Services currently running"
+            self._cards["tasks_failed"] = self._metric_card(
+                "Failed", "?", "Failed (24h)"
             )
-            self._cards["projects"] = self._metric_card(
-                "Projects", "?", "Active projects"
+            self._cards["agents_live"] = self._metric_card(
+                "Live Agents", "?", "Daemon agents with heartbeat"
             )
-            self._cards["agents"] = self._metric_card(
-                "Agents", "?", "Registered agent capabilities"
+            self._cards["cpu"] = self._metric_card(
+                "CPU", "?", "Host CPU %"
+            )
+            self._cards["memory"] = self._metric_card(
+                "Memory", "?", "Host RAM used %"
             )
 
     def _metric_card(self, title: str, value: str, subtitle: str) -> ui.element:
@@ -106,11 +109,13 @@ class OverviewPanel:
             self._activity_log = ui.column().classes('w-full gap-1')
 
     async def _refresh(self):
-        svc_result, proj_result, cap_result, task_result = await asyncio.gather(
+        svc_result, proj_result, cap_result, task_result, metrics_result, res_result = await asyncio.gather(
             self.api.get_services(),
             self.api.get_projects(),
             self.api.get_capabilities(),
             self.api.get_tasks(),
+            self.api.get_metrics_tasks(),
+            self.api.get_metrics_resources(),
         )
 
         if svc_result.ok:
@@ -144,6 +149,28 @@ class OverviewPanel:
             self._bar.options["series"][0]["data"][2]["value"] = statuses["COMPLETED"]
             self._bar.options["series"][0]["data"][3]["value"] = statuses["FAILED"]
             self._bar.update()
+
+        if metrics_result.ok:
+            data = metrics_result.data or {}
+            by_status = data.get("by_status", [])
+            status_map = {r.get("status", ""): r.get("count", 0) for r in by_status}
+            completed = status_map.get("COMPLETED", 0)
+            failed = status_map.get("FAILED", 0)
+            self._cards["tasks_done"].val_label.text = str(completed)
+            self._cards["tasks_failed"].val_label.text = str(failed)
+
+        if res_result.ok:
+            res = res_result.data or {}
+            self._cards["cpu"].val_label.text = f"{res.get('cpu_percent', 0):.0f}%"
+            mem = res.get("memory", {})
+            mem_pct = mem.get("percent", 0)
+            self._cards["memory"].val_label.text = f"{mem_pct:.0f}%"
+
+        # Live agent count from metrics or capabilities
+        live_result = await self.api.get_metrics_live_agents()
+        if live_result.ok:
+            agents = live_result.data if isinstance(live_result.data, list) else []
+            self._cards["agents_live"].val_label.text = str(len(agents))
 
             self._activity_log.clear()
             recent = sorted(tasks, key=lambda t: t.get("updated_at", ""), reverse=True)[:10]

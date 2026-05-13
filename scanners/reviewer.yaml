@@ -1,0 +1,11 @@
+deny_patterns: []
+description: Diff-only scanner for reviewer role — no build, comments only
+ignore_patterns:
+- '**/__pycache__/**'
+- '**/.pytest_cache/**'
+- '**/*.pyc'
+- '**/data/**'
+rules:
+  diff_only: true
+  no_build: true
+semgrep_config: p/secrets

@@ -1,0 +1,13 @@
+deny_patterns:
+- '**/cmd/**/main.go'
+- '**/*.exe'
+- '**/migrations/0[0-9][0-9]_*.sql'
+description: Cross-module dependency scanner for architect role — structural validation
+ignore_patterns:
+- '**/__pycache__/**'
+- '**/.pytest_cache/**'
+- '**/*.pyc'
+rules:
+  cross_module_deps: true
+  structural_validation: true
+semgrep_config: p/python

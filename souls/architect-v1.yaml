@@ -1,7 +1,7 @@
 soul_version: "1.0.0"
 soul_id: "architect-v1"
 agent_role: ARCHITECT
-inherits: ~
+inherits: "base-v1"
 
 metadata:
   name: "System Architect"

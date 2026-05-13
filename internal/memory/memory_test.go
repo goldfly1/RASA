@@ -379,7 +379,7 @@ func TestContextAssembler(t *testing.T) {
 
 	store := &SessionStore{client: client}
 	canonical := &CanonicalStore{db: db}
-	assembler := NewContextAssembler(store, canonical)
+	assembler := NewContextAssembler(store, canonical, nil, nil)
 
 	soulID := "test-soul-asm"
 	taskID := "test-task-" + t.Name()

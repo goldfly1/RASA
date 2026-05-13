@@ -1,0 +1,9 @@
+deny_patterns: []
+description: Documentation-focused scanner for planner role — lints docs, no execution
+ignore_patterns:
+- '**/__pycache__/**'
+- '**/*.pyc'
+rules:
+  documentation_lint: true
+  no_execution: true
+semgrep_config: p/markdown

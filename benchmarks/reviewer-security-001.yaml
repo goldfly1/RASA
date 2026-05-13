@@ -1,0 +1,16 @@
+benchmark_id: reviewer-security-001
+expected_patterns:
+- security
+- plaintext
+- input
+forbidden_patterns:
+- acceptable
+- fine as-is
+input_prompt: 'Review this code for security issues: `password = input("Enter password:
+  ")`'
+name: Reviewer security check
+scoring:
+  lint_pass_weight: 0.3
+  min_passing_score: 0.6
+  pattern_match_weight: 0.7
+soul_id: reviewer-v1

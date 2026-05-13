@@ -29,11 +29,13 @@ type ContextPayload struct {
 type ContextAssembler struct {
 	store     *SessionStore
 	canonical *CanonicalStore
+	vector    *VectorStore
+	embedder  Embedder
 }
 
 // NewContextAssembler creates an assembler backed by the given stores.
-func NewContextAssembler(store *SessionStore, canonical *CanonicalStore) *ContextAssembler {
-	return &ContextAssembler{store: store, canonical: canonical}
+func NewContextAssembler(store *SessionStore, canonical *CanonicalStore, vector *VectorStore, embedder Embedder) *ContextAssembler {
+	return &ContextAssembler{store: store, canonical: canonical, vector: vector, embedder: embedder}
 }
 
 // Assemble resolves the requested variables and returns a ContextPayload.
@@ -78,7 +80,7 @@ func (a *ContextAssembler) AssembleHTTP(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, payload)
 }
 
-// --- resolution helpers ---
+// --- variable resolvers ---
 
 func (a *ContextAssembler) resolve(ctx context.Context, varName string, req AssembleRequest) (any, error) {
 	switch varName {
@@ -120,8 +122,30 @@ func (a *ContextAssembler) resolveShortTerm(ctx context.Context, req AssembleReq
 }
 
 func (a *ContextAssembler) resolveSemantic(ctx context.Context, req AssembleRequest) (any, error) {
-	// Semantic search requires embedder — return empty for Phase 1
-	return []any{}, nil
+	queryText := req.Resolution["semantic_matches"]
+	if queryText == "" || a.vector == nil || a.embedder == nil {
+		return []any{}, nil
+	}
+
+	embedding, err := a.embedder.Embed(ctx, queryText)
+	if err != nil {
+		return []any{}, fmt.Errorf("semantic embed: %w", err)
+	}
+
+	matches, err := a.vector.Search(ctx, embedding, 5)
+	if err != nil {
+		return []any{}, fmt.Errorf("semantic search: %w", err)
+	}
+	if matches == nil {
+		return []any{}, nil
+	}
+
+	// Convert to generic []any for JSON serialization
+	result := make([]any, len(matches))
+	for i, m := range matches {
+		result[i] = m
+	}
+	return result, nil
 }
 
 func (a *ContextAssembler) resolveGraph(ctx context.Context, req AssembleRequest) (any, error) {

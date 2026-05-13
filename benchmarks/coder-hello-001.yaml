@@ -1,0 +1,15 @@
+﻿benchmark_id: "coder-hello-001"
+soul_id: "coder-v2-dev"
+description: "Smoke test: coder produces a minimal Python function"
+input_prompt: "Write a Python function called `greet` that takes a name and returns 'Hello, {name}!'. Only output the function, no explanation."
+expected_patterns:
+  - "def greet"
+  - "Hello,"
+  - "return"
+forbidden_patterns:
+  - "TODO"
+  - "pass"
+scoring:
+  pattern_match_weight: 0.7
+  lint_pass_weight: 0.3
+  min_passing_score: 0.6

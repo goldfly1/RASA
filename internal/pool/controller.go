@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
+	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -17,18 +20,17 @@ type PoolController struct {
 	registry *AgentRegistry
 	pgSub    *bus.PGSub
 	redisSub *bus.RedisSub
-	orchDB   *sql.DB // rasa_orch for task updates
-	poolDB   *sql.DB // rasa_pool for heartbeat/backpressure/agent tables
+	orchDB   *sql.DB
+	poolDB   *sql.DB
 
 	mu    sync.Mutex
-	hbSeq map[string]int64 // agent_id → last heartbeat seq_num
+	hbSeq map[string]int64
 
 	config *PoolConfig
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-// NewPoolController wires the pool controller to its dependencies.
 func NewPoolController(
 	ctx context.Context,
 	cfg *PoolConfig,
@@ -51,14 +53,15 @@ func NewPoolController(
 	}
 }
 
-// Registry exposes the agent registry for health checks.
 func (c *PoolController) Registry() *AgentRegistry {
 	return c.registry
 }
 
-// Start activates subscriptions and begins the reap loop.
 func (c *PoolController) Start() error {
 	if err := c.pgSub.Subscribe(c.ctx, "tasks_assigned", c.HandleTaskAssigned); err != nil {
+		return err
+	}
+	if err := c.pgSub.Subscribe(c.ctx, "task_completed", c.HandleTaskCompleted); err != nil {
 		return err
 	}
 	if err := c.redisSub.Subscribe(c.ctx, "agents.heartbeat.*", c.HandleHeartbeat); err != nil {
@@ -72,7 +75,61 @@ func (c *PoolController) Start() error {
 	return nil
 }
 
-// HandleTaskAssigned receives a task_assigned envelope and routes to an agent.
+func (c *PoolController) HandleTaskCompleted(env *bus.Envelope) {
+	var p struct {
+		TaskID    string `json:"task_id"`
+		NewStatus string `json:"new_status"`
+	}
+	if err := json.Unmarshal(env.Payload, &p); err != nil || p.TaskID == "" {
+		return
+	}
+
+	log.Printf("pool-controller: task completed (task=%s status=%s)", p.TaskID, p.NewStatus)
+
+	query := `WITH newly_unblocked AS (
+		SELECT td.to_task_id
+		FROM task_dependencies td
+		WHERE td.from_task_id = $1
+		AND NOT EXISTS (
+			SELECT 1 FROM task_dependencies td2
+			JOIN tasks t2 ON td2.from_task_id = t2.id
+			WHERE td2.to_task_id = td.to_task_id
+			AND t2.status NOT IN ('COMPLETED')
+		)
+	)
+	UPDATE tasks t
+	SET status = 'ASSIGNED', assigned_at = NOW()
+	FROM newly_unblocked nu
+	WHERE t.id = nu.to_task_id
+	AND t.status = 'PENDING'
+	RETURNING t.id::text, t.soul_id`
+
+	rows, err := c.orchDB.QueryContext(c.ctx, query, p.TaskID)
+	if err != nil {
+		log.Printf("pool-controller: dependency resolution query: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var taskID, soulID string
+		if err := rows.Scan(&taskID, &soulID); err != nil {
+			continue
+		}
+		log.Printf("pool-controller: unblocked dependent task %s -> %s", taskID, soulID)
+
+		env, err := bus.NewEnvelope("pool-controller", "tasks_assigned",
+			json.RawMessage(fmt.Sprintf(`{"task_id":"%s","soul_id":"%s"}`, taskID, soulID)),
+			bus.Metadata{SoulID: soulID, TaskID: taskID},
+			"",
+		)
+		if err != nil {
+			continue
+		}
+		c.HandleTaskAssigned(env)
+	}
+}
+
 func (c *PoolController) HandleTaskAssigned(env *bus.Envelope) {
 	soulID := env.Metadata.SoulID
 	taskID := env.Metadata.TaskID
@@ -89,12 +146,11 @@ func (c *PoolController) HandleTaskAssigned(env *bus.Envelope) {
 
 	agents := c.registry.FindBySoul(soulID)
 	if len(agents) == 0 {
-		log.Printf("pool-controller: no agent for soul %s, keeping task %s PENDING", soulID, taskID)
-		c.recordBackpressure(soulID, taskID)
+		log.Printf("pool-controller: no agent for soul %s, spawning new agent", soulID)
+		go c.spawnAgent(soulID)
 		return
 	}
 
-	// Pick random agent (simple pilot routing)
 	chosen := agents[rand.Intn(len(agents))]
 	log.Printf("pool-controller: routing task %s -> agent %s (soul=%s)", taskID, chosen, soulID)
 
@@ -107,13 +163,11 @@ func (c *PoolController) HandleTaskAssigned(env *bus.Envelope) {
 	}
 }
 
-// recordBackpressure inserts a backpressure event when no agent is available.
 func (c *PoolController) recordBackpressure(soulID, taskID string) {
 	active := c.registry.Count()
 	idle := c.registry.CountByState("IDLE")
 	_, err := c.poolDB.ExecContext(c.ctx,
-		`INSERT INTO backpressure_events (reason, agents_busy, agents_idle, queue_depth)
-		 VALUES ($1, $2, $3, 0)`,
+		"INSERT INTO backpressure_events (reason, agents_busy, agents_idle, queue_depth) VALUES ($1, $2, $3, 0)",
 		"no_agent_for_soul:"+soulID, active, idle,
 	)
 	if err != nil {
@@ -121,7 +175,6 @@ func (c *PoolController) recordBackpressure(soulID, taskID string) {
 	}
 }
 
-// HandleHeartbeat receives an agent heartbeat and updates the registry.
 func (c *PoolController) HandleHeartbeat(env *bus.Envelope) {
 	agentID := env.Metadata.AgentID
 	soulID := env.Metadata.SoulID
@@ -141,24 +194,20 @@ func (c *PoolController) HandleHeartbeat(env *bus.Envelope) {
 
 	info := c.registry.Upsert(agentID, soulID, payload.CurrentState)
 
-	// Bump heartbeat sequence number
 	c.mu.Lock()
 	c.hbSeq[agentID]++
 	seq := c.hbSeq[agentID]
 	c.mu.Unlock()
 
-	// Durable heartbeat insert (best-effort)
 	hbPayload, _ := json.Marshal(map[string]string{
 		"state":   payload.CurrentState,
 		"soul_id": soulID,
 	})
 	c.poolDB.ExecContext(c.ctx,
-		`INSERT INTO heartbeats (agent_id, seq_num, payload, received_at)
-		 VALUES ($1, $2, $3, NOW())`,
+		"INSERT INTO heartbeats (agent_id, seq_num, payload, received_at) VALUES ($1, $2, $3, NOW())",
 		agentID, seq, string(hbPayload),
 	)
 
-	// Upsert into durable agent registry (new agent or state change)
 	dbState := payload.CurrentState
 	if dbState == "IDLE" {
 		dbState = "REGISTERED"
@@ -166,13 +215,26 @@ func (c *PoolController) HandleHeartbeat(env *bus.Envelope) {
 	c.poolDB.ExecContext(c.ctx,
 		`INSERT INTO agents (agent_id, soul_id, hostname, state, last_heartbeat, registered_at)
 		 VALUES ($1, $2, 'localhost', $3, NOW(), $4)
-		 ON CONFLICT (agent_id) DO UPDATE
-		 SET state=$3, soul_id=$2, last_heartbeat=NOW()`,
+		 ON CONFLICT (agent_id) DO UPDATE SET state=$3, soul_id=$2, last_heartbeat=NOW()`,
 		agentID, soulID, dbState, info.RegisteredAt,
 	)
 }
 
-// reapLoop periodically removes dead agents.
+// spawnAgent launches a new Python agent process for the given soul.
+func (c *PoolController) spawnAgent(soulID string) {
+	log.Printf("pool-controller: spawning agent for soul=%s", soulID)
+	cmd := exec.Command(
+		"powershell.exe", "-Command",
+		fmt.Sprintf(`C:\Users\goldf\rasa\.venv\Scripts\python.exe -m rasa.agent.runtime --soul souls/%s.yaml --mode daemon`, soulID),
+	)
+	cmd.Env = append(cmd.Env, fmt.Sprintf("RASA_DB_PASSWORD=%s", os.Getenv("RASA_DB_PASSWORD")))
+	if err := cmd.Start(); err != nil {
+		log.Printf("pool-controller: failed to spawn agent for %s: %v", soulID, err)
+		return
+	}
+	log.Printf("pool-controller: spawned agent pid=%d for soul=%s", cmd.Process.Pid, soulID)
+}
+
 func (c *PoolController) reapLoop() {
 	ticker := time.NewTicker(time.Duration(c.config.Pool.HeartbeatIntervalSeconds) * time.Second)
 	defer ticker.Stop()
@@ -198,7 +260,6 @@ func (c *PoolController) reapLoop() {
 	}
 }
 
-// Shutdown gracefully stops the controller.
 func (c *PoolController) Shutdown() {
 	c.cancel()
 	log.Println("pool-controller: shut down")

@@ -10,6 +10,8 @@ from typing import Any
 
 import psycopg
 
+from rasa.orchestrator.dag import detect_cycle
+
 
 def _dsn() -> str:
     host = os.environ.get("RASA_DB_HOST", "localhost")
@@ -46,6 +48,8 @@ class TaskDelegator:
                     (task_id, title, description, json.dumps(payload or {}), soul_id),
                 )
                 if parent_id:
+                    if detect_cycle(task_id, parent_id):
+                        raise ValueError(f"Cannot set parent_id={parent_id} for task {task_id}: would create a cycle")
                     cur.execute(
                         "UPDATE tasks SET parent_id = %s WHERE id = %s",
                         (parent_id, task_id),

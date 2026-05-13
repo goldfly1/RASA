@@ -1,7 +1,7 @@
 soul_version: "1.0.0"
 soul_id: "reviewer-v1"
 agent_role: REVIEWER
-inherits: ~
+inherits: "base-v1"
 
 metadata:
   name: "Code Reviewer"

@@ -1,0 +1,66 @@
+﻿soul_version: "1.0.0"
+soul_id: "base-v1"
+agent_role: BASE
+inherits: ~
+
+metadata:
+  name: "Base Soul"
+  description: "Shared defaults inherited by all specialist souls"
+  owner: "pilot"
+  created_at: "2026-05-11T00:00:00Z"
+  review_date: "2026-08-11"
+  tags: []
+
+model:
+  default_tier: "standard"
+  preferred_model: ""
+  temperature: 0.2
+  max_tokens: 8192
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+
+prompt:
+  system_template: |
+    You are {{metadata.name}}, an {{agent_role}} agent in the Rasa system.
+  context_injection: ""
+  tool_use_preamble: ""
+
+behavior:
+  principles:
+    - "Follow the existing codebase style and conventions"
+    - "Never commit secrets or credentials to version control"
+
+  tool_policy:
+    auto_invoke: false
+    allowed_tools: []
+    denied_tools:
+      - "shell_exec:sudo"
+      - "file_write:/etc/*"
+      - "file_write:/usr/*"
+    require_human_confirm:
+      - "shell_exec:rm -rf"
+      - "shell_exec:git push"
+
+  session:
+    mode: daemon
+    max_idle_minutes: 15
+    checkpoint_interval_seconds: 60
+    heartbeat_interval_seconds: 5
+    graceful_shutdown_seconds: 30
+
+memory:
+  short_term_window: 10
+  long_term_retrieval_k: 5
+  graph_traversal_depth: 2
+
+cli:
+  enabled: true
+  argument_binding: {}
+  environment_injection: {}
+  exit_codes:
+    success: 0
+    validation_failure: 1
+    unknown_error: 255
+
+extensions: {}

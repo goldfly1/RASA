@@ -30,6 +30,7 @@ class TerminalPanel:
         self._tree: ui.column | None = None
         self._input: ui.input | None = None
         self._ready = True
+        self._mode = "autonomous"
 
     def build(self):
         with ui.column().classes("w-full gap-0 p-0"):
@@ -38,6 +39,8 @@ class TerminalPanel:
                 ui.label("RASA Agent Console").classes("text-green-400 text-xs mono font-bold")
                 ui.space()
                 self._project_label = ui.label().classes("text-dim text-xs mono")
+                ui.button("reset", icon="refresh", color="dark",
+                          on_click=self._on_reset).props("dense flat size=sm").classes("ml-2")
 
             # Scrollable agent activity tree
             self._tree = ui.column().classes("w-full gap-0 p-2 terminal-tree").style(
@@ -60,6 +63,19 @@ class TerminalPanel:
                 self._input.on("keydown.enter", self._on_submit)
 
         self._update_project_label()
+
+    async def _on_reset(self):
+        """Reset the orchestrator conversation and clear the terminal tree."""
+        self._tree.clear()
+        self._entry("info", "Resetting orchestrator conversation...")
+        try:
+            result = await self.api.reset_orchestrator()
+            if result.ok:
+                self._entry("info", "Orchestrator reset — conversation cleared.")
+            else:
+                self._entry("error", f"Reset failed: {result.error}")
+        except Exception as e:
+            self._entry("error", f"Reset error: {e}")
 
     def _update_project_label(self):
         if not hasattr(self, "_project_label") or not self._project_label:
@@ -114,7 +130,7 @@ class TerminalPanel:
             async with httpx.AsyncClient(timeout=httpx.Timeout(300)) as client:
                 resp = await client.post(
                     f"{base}/api/orchestrator/direct",
-                    json={"message": cmd, "project_id": state.selected_project_id},
+                    json={"message": cmd, "project_id": state.selected_project_id, "mode": self._mode},
                 )
                 if resp.status_code == 200:
                     return resp.json()
@@ -138,6 +154,17 @@ class TerminalPanel:
         if cmd == "/clear":
             self._tree.clear()
             self._entry("info", "Session cleared.")
+            self._ready = True
+            return
+
+        if cmd == "/mode":
+            self._mode = "step_by_step" if self._mode == "autonomous" else "autonomous"
+            self._entry("info", f"Mode switched to {self._mode}")
+            self._ready = True
+            return
+
+        if cmd in ("/help", "/?"):
+            self._entry("info", "Commands: /clear  /mode  /help  /?, or just type a message for the orchestrator.")
             self._ready = True
             return
 
@@ -187,7 +214,8 @@ class TerminalPanel:
 
         usage = data.get("usage", {})
         elapsed = data.get("elapsed_seconds", 0)
-        self._entry("info", f"done — {elapsed}s · {usage.get('prompt_tokens', 0)}↑ {usage.get('completion_tokens', 0)}↓")
+        n_calls = data.get("tool_calls", len(steps))
+        self._entry("info", f"done — {elapsed}s · {n_calls} tool calls · {usage.get('prompt_tokens', 0)}↑ {usage.get('completion_tokens', 0)}↓")
 
         # Force scroll to bottom after response
         try:

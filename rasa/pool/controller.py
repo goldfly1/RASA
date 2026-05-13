@@ -25,6 +25,7 @@ VENV_PYTHON = Path(__file__).parent.parent.parent / ".venv" / "Scripts" / "pytho
 # Track daemon agents via heartbeats: soul_id -> [(agent_id, last_seen), ...]
 _live_agents: dict[str, list[tuple[str, float]]] = {}
 _AGENT_TTL = 30.0  # seconds before a non-heartbeating agent is considered dead
+_daemon_procs: list[subprocess.Popen] = []  # track spawned daemon processes for cleanup
 
 
 def _pg_conn():
@@ -66,12 +67,16 @@ def _pick_agent(soul_id: str) -> str | None:
 
 
 async def _handle_raw_notify(conn: psycopg.Connection):
-    """Listen for raw pg_notify on tasks_assigned and handle assignments."""
+    """Listen for raw pg_notify on tasks_assigned and task_completed."""
     conn.execute("LISTEN tasks_assigned")
-    print("[pool] listening on tasks_assigned (PG NOTIFY)", flush=True)
+    conn.execute("LISTEN task_completed")
+    print("[pool] listening on tasks_assigned + task_completed (PG NOTIFY)", flush=True)
 
     def _callback(notice):
-        asyncio.create_task(_on_task_assigned(notice.payload or ""))
+        if notice.channel == "tasks_assigned":
+            asyncio.create_task(_on_task_assigned(notice.payload or ""))
+        elif notice.channel == "task_completed":
+            asyncio.create_task(_on_task_completed(notice.payload or ""))
 
     conn.add_notify_handler(_callback)
 
@@ -81,6 +86,53 @@ async def _handle_raw_notify(conn: psycopg.Connection):
         # psycopg sync connections only fire notify handlers during execute()
         conn.execute("SELECT 1")
 
+
+async def _on_task_completed(payload: str):
+    """When a task completes or fails, unblock dependents that are ready."""
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return
+    task_id = data.get("task_id")
+    if not task_id:
+        return
+    print(f"[pool] task completed/failed {task_id[:12]}..., checking dependents", flush=True)
+    try:
+        with _pg_conn() as conn:
+            with conn.cursor() as cur:
+                # Find PENDING tasks that depend on this completed task and
+                # have no other incomplete upstream dependencies
+                cur.execute(
+                    """WITH newly_unblocked AS (
+                           SELECT td.to_task_id
+                           FROM task_dependencies td
+                           WHERE td.from_task_id = %s
+                             AND NOT EXISTS (
+                               SELECT 1 FROM task_dependencies td2
+                               JOIN tasks t2 ON td2.from_task_id = t2.id
+                               WHERE td2.to_task_id = td.to_task_id
+                                 AND t2.status NOT IN ('COMPLETED')
+                             )
+                       )
+                       UPDATE tasks t
+                       SET status = 'ASSIGNED', assigned_at = NOW()
+                       FROM newly_unblocked nu
+                       WHERE t.id = nu.to_task_id
+                         AND t.status = 'PENDING'
+                       RETURNING t.id::text, t.soul_id""",
+                    (task_id,),
+                )
+                unblocked = cur.fetchall()
+                for (tid, soul_id) in unblocked:
+                    print(f"[pool] unblocked dependent task {tid[:12]}... -> {soul_id}", flush=True)
+                    cur.execute(
+                        "SELECT pg_notify('tasks_assigned', %s)",
+                        (json.dumps({"task_id": tid, "soul_id": soul_id}),),
+                    )
+                if unblocked:
+                    conn.commit()
+    except Exception as e:
+        print(f"[pool] dependency resolution error: {e}", flush=True)
 
 async def _on_task_assigned(payload: str):
     """Process a raw pg_notify payload from TaskDelegator.assign_task()."""
@@ -140,6 +192,44 @@ async def _handle_heartbeat(env: Envelope) -> None:
     else:
         print(f"[pool] unhandled state from {agent_id}: {state}", flush=True)
 
+
+
+def _spawn_daemon(soul_id: str) -> None:
+    """Launch a long-lived daemon agent runtime."""
+    log_dir = Path(__file__).parent.parent.parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / f"daemon_{soul_id}.log"
+    env = os.environ.copy()
+    env["RASA_DB_PASSWORD"] = os.environ.get("RASA_DB_PASSWORD", "")
+    env.setdefault("RASA_MODEL", "deepseek-v4-pro:cloud")
+    env.setdefault("OLLAMA_BASE_URL", os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"))
+    cmd = [
+        str(VENV_PYTHON),
+        "-m", "rasa.agent.runtime",
+        "--soul", f"souls/{soul_id}.yaml",
+    ]
+    print(f"[pool] launching daemon agent for {soul_id} (log: {log_path})", flush=True)
+    with open(log_path, "w") as log:
+        proc = subprocess.Popen(
+            cmd, env=env,
+            stdout=log, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    _daemon_procs.append(proc)
+
+
+def _launch_pool_agents(cfg: dict) -> None:
+    """Spawn daemon agents from pool.yaml replicas config."""
+    souls = cfg.get("souls", [])
+    if not souls:
+        print("[pool] no souls configured in pool.yaml, skipping daemon launch", flush=True)
+        return
+    for entry in souls:
+        soul_id = entry["id"]
+        replicas = entry.get("replicas", 1)
+        for i in range(replicas):
+            print(f"[pool] starting daemon {soul_id} replica {i+1}/{replicas}", flush=True)
+            _spawn_daemon(soul_id)
 
 def _spawn_one_shot(task_id: str, soul_id: str, goal: str | None = None) -> None:
     """Spawn a one-shot agent dispatcher subprocess."""
@@ -209,11 +299,13 @@ async def _sweep_stale_tasks():
         except Exception as e:
             print(f"[pool] stale-task sweep error: {e}", flush=True)
         await asyncio.sleep(60)  # check every minute
+
+
+async def _prune_loop():
     """Periodically prune expired agent entries."""
     while True:
         await asyncio.sleep(15)
         _prune_expired()
-
 
 async def main():
     import argparse
@@ -224,6 +316,12 @@ async def main():
     with open(args.pool_file) as f:
         cfg = yaml.safe_load(f)
     print("[pool] controller starting with config:", args.pool_file, flush=True)
+
+    # Launch daemon agent runtimes from pool config
+    _launch_pool_agents(cfg)
+
+    # Wait a moment for daemon agents to start and register heartbeats
+    await asyncio.sleep(3)
 
     # PostgreSQL LISTEN for task assignments (raw NOTIFY from delegator)
     pg_conn = _pg_conn()
@@ -238,6 +336,7 @@ async def main():
     loop = asyncio.get_running_loop()
     loop.create_task(_handle_raw_notify(pg_conn))
     loop.create_task(_sweep_stale_tasks())
+    loop.create_task(_prune_loop())
 
     # Sweep stale ASSIGNED tasks so they don't get orphaned
     try:

@@ -15,6 +15,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from rasa.gui.chat import list_souls, send_message, reset_conversation
+from rasa.gui import metrics
 from rasa.gui.health import HealthChecker
 from rasa.gui.process import AlreadyRunningError, NotRunningError, ProcessManager
 from rasa.gui.registry import build_registry, get_service_map
@@ -529,6 +530,40 @@ async def _relay_cleanup_loop():
         await asyncio.sleep(600)  # every 10 minutes
 
 
+
+# Metrics endpoints
+
+async def metrics_summary(request):
+    return JSONResponse(metrics.get_all_metrics())
+
+async def metrics_tasks(request):
+    return JSONResponse(metrics.get_task_summary())
+
+async def metrics_agents(request):
+    return JSONResponse(metrics.get_agent_uptime())
+
+async def metrics_souls(request):
+    return JSONResponse({
+        "performance": metrics.get_soul_performance(),
+        "drift": metrics.get_drift_status(),
+    })
+
+async def metrics_live_agents(request):
+    return JSONResponse(metrics.get_live_agents())
+
+async def metrics_resources(request):
+    """Host-level resource usage via psutil."""
+    try:
+        import psutil
+        return JSONResponse({
+            "cpu_percent": psutil.cpu_percent(interval=0.5),
+            "cpu_count": psutil.cpu_count(),
+            "memory": dict(psutil.virtual_memory()._asdict()),
+            "disk": dict(psutil.disk_usage(str(Path(__file__).parent.parent.parent))._asdict()),
+        })
+    except ImportError:
+        return JSONResponse({"error": "psutil not installed"}, status_code=500)
+
 @asynccontextmanager
 async def lifespan(app):
     await health_checker.start()
@@ -545,6 +580,12 @@ async def lifespan(app):
 
 
 routes = [
+    Route("/api/metrics", metrics_summary),
+    Route("/api/metrics/tasks", metrics_tasks),
+    Route("/api/metrics/agents", metrics_agents),
+    Route("/api/metrics/souls", metrics_souls),
+    Route("/api/metrics/live-agents", metrics_live_agents),
+    Route("/api/metrics/resources", metrics_resources),
     Route("/api/services", list_services),
     Route("/api/services/{id}/start", start_service, methods=["POST"]),
     Route("/api/services/{id}/stop", stop_service, methods=["POST"]),

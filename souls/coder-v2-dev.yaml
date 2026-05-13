@@ -1,7 +1,7 @@
 soul_version: "1.0.0"
 soul_id: "coder-v2-dev"
 agent_role: CODER
-inherits: ~
+inherits: "base-v1"
 
 metadata:
   name: "Senior Coder"
@@ -51,7 +51,7 @@ behavior:
     - "Follow the existing codebase style and conventions"
 
   tool_policy:
-    auto_invoke: false
+    auto_invoke: true
     allowed_tools:
       - "file_read"
       - "file_write"
