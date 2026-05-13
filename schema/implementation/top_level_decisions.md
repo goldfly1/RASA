@@ -1,7 +1,7 @@
 ﻿# Top-Level Decisions
 
 > **Architectural Reference:** `architectural_schema_v2.1.md` (cross-cutting)
-> **Status:** Draft — pilot provisioning
+> **Status:** Updated 2026-05-13 — reflects all Gates 0–5 verified
 > **Hardware Environment:** Omen 16 — Intel Ultra 7 255, 64 GB RAM, RTX 5060 8 GB VRAM, 1 TB SSD (~250 GB free). PostgreSQL 16 + pgvector installed locally. Single-node lab machine.
 > **Owner:** TBD
 > **Last Updated:** 2026-04-28
@@ -22,7 +22,7 @@ These decisions are **provisional by design**. Each entry includes a review date
 
 | Decision | Selection | Rationale | Review Date |
 |----------|-----------|-----------|-------------|
-| **Control Plane** | **Go 1.24+** | Goroutines/channels map cleanly to the Orchestrator, Pool Controller, Message Bus, and Recovery Controller. Static binaries simplify sidecar injection into agent pods. | 2026-07-23 |
+| **Control Plane** | **Go 1.24+** | Goroutines/channels map cleanly to the Orchestrator, Pool Controller, Message Bus, and Recovery Controller. Static binaries compile to a single executable per service. | 2026-07-23 |
 | **Agent Runtime & LLM Gateway** | **Python 3.12+** | Ecosystem dominance for LLM SDKs (OpenAI, Anthropic, transformers). Agents require rapid iteration; Python minimizes glue code for model calls. | 2026-07-23 |
 | **Inter-language contracts** | **JSON over localhost** (pilot); **Protobuf + gRPC** (upgrade) | JSON avoids codegen overhead during rapid iteration. gRPC can be introduced when components are deployed across hosts. | 2026-07-23 |
 
@@ -135,6 +135,8 @@ These decisions are **provisional by design**. Each entry includes a review date
 | **Gate 4** | Safety & Quality | Sandbox Pipeline scans/builds/tests output. Recovery Controller replays checkpoint. Evaluation Engine detects drift. | ✅ Complete |
 | **Gate 5** | Integration | Observability captures metrics from all components into database tables with queryable SQL views. Smoke test verifies end-to-end task submission and pipeline. observe.py provides live terminal dashboard. | ✅ Complete |
 
+
+> **Note (2026-05-13):** Post-gate work has further hardened the runtime (NOTIFY fix, tool-calling loop, checkpoint serialization), policy engine (7 rules seeded), dispatcher (tool execution), and added bootstrap ingestion, scanner overlays, and drift detection. See `schema/report/schema-vs-implementation-report.md` for current status.
 ---
 
 ## 6. Change Log

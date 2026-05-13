@@ -13,6 +13,9 @@ The schema describes a mature multi-agent orchestration platform. The current co
 
 ---
 
+
+> **Note (2026-05-13):** Former `extended-gates.md` (Gates 6–12) has been merged into this document. The Phase 0–6 structure subsumes the extended gate numbering. See the phase → gate mapping below.
+
 ## Phase 0 — Foundation & Shared Infrastructure
 
 **Goal:** Fix duplicated code, validate soul sheets, and complete the database schema so later phases don't repeat groundwork.

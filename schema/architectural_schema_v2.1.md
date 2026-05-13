@@ -1,6 +1,6 @@
 # Architectural Schema: Agentic AI Coding Team
 
-> **Status:** Draft v2.1 — formatting and interface boundary fixes applied; open for implementation planning  
+> **Status:** Updated v2.2 (2026-05-13) — graph store normalized to JSONB per pilot implementation; implementation planning complete  
 > **Scope:** Computational and data architecture derived from `strategic_considerations_ver2.md`. Does not include non-technical governance (see Addendum).
 
 ---
@@ -374,7 +374,7 @@ The human_reviews table follows a simple two-state lifecycle:
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
 │  │ Short-Term   │  │ Semantic     │  │ Episodic /           │  │
 │  │ Session Store│  │ Vector Index │  │ Graph Store (facts)  │  │
-│  │   (Redis)    │  │  (pgvector)  │  │   (Neo4j / RDF)      │  │
+│  │   (Redis)    │  │  (pgvector)  │  │   (JSONB + recursive CTEs)      │  │
 │  └──────────────┘  └──────────────┘  └──────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
                     │

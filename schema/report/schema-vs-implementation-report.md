@@ -1,8 +1,11 @@
 # Schema vs. Implementation Comparison Report
 
+> **Status:** Updated 2026-05-13 — reflects post-handoff implementation
+> **Last reviewed:** 2026-05-13
+
 ## Executive Summary
 
-The RASA codebase represents a **Phase 1 pilot** where all 5 implementation gates are marked complete in `top_level_decisions.md`. However, the gap between the **ambitious schema specifications** and the **actual code** is substantial. Many components described in rich detail across 14 implementation documents exist only as **scaffolding, stubs, or simplified approximations**. The system is functional enough for end-to-end smoke tests, but numerous advanced features (checkpoint replay, drift detection, policy rule evaluation, benchmark regression, semantic retrieval, canonical model reconciliation) are either missing entirely or represented by placeholder logic.
+The RASA codebase is a **Phase 1 pilot** with all 5 implementation gates complete. Since the initial 2026-04-25 report, significant post-gate work has closed many gaps: checkpoint serialization, policy rule enforcement, DAG cycle detection, bootstrap ingestion, scanner overlays, drift detection, soul sheet hot-reload, and the dispatcher/runtime tool-calling loop are all now functional. Remaining gaps are concentrated in sandbox full-pipeline validation, checkpoint *recovery* (as distinct from serialization), multi-agent scenarios, and memory/pgvector semantic retrieval.
 
 ---
 
@@ -11,15 +14,16 @@ The RASA codebase represents a **Phase 1 pilot** where all 5 implementation gate
 | Schema Requirement | Implementation Status | Notes |
 |---|---|---|
 | **State machine**: `IDLE → WARMING → ACTIVE → PAUSED → RESUMING → CHECKPOINTED → RECOVERING` | **Partial** | Only `IDLE`, `WARMING`, `ACTIVE`, `CHECKPOINTED` exist. `PAUSED`, `RESUMING`, `RECOVERING` are missing. |
-| **Soul sheet loading** with JSON Schema validation, inheritance resolution, CLI binding, `prompt.assembly_hash` | **Partial** | Loads YAML via `yaml.safe_load()`. No JSON Schema validation. No inheritance resolution. No `assembly_hash` computation. |
-| **Heartbeat**: configurable interval, payload with `memory_usage_bytes`, timeout `3× interval` | **Partial** | Heartbeat emits `current_state` and `soul_id` only. No `memory_usage_bytes`. No timeout detection in Python runtime itself. |
-| **Checkpointing**: full dump to Redis (hot) + PostgreSQL (durable) + flat files (`data/archive/`) | **Missing** | `CHECKPOINTED` state exists but no actual checkpoint serialization. No Redis hot copy. No flat-file archive. |
+| **State machine**: `IDLE → WARMING → ACTIVE → PAUSED → RESUMING → CHECKPOINTED → RECOVERING` | **Implemented** | All 7 states exist in `AgentState` enum. `pause()`, `resume()`, `recover()` methods wired. Control channel listens for commands. |
+| **Soul sheet loading** with JSON Schema validation, inheritance resolution, CLI binding | **Partial** | `SoulLoader` validates via JSON Schema (if `jsonschema` installed, warns otherwise), resolves inheritance via deep-merge, tracks mtimes for hot-reload. `assembly_hash` not yet computed. |
+| **Heartbeat**: configurable interval, payload with `memory_usage_bytes`, timeout `3× interval` | **Implemented** | Heartbeat includes `memory_usage_bytes`, `cpu_percent`, and host metrics via `psutil`. Interval from soul sheet. Timeout detection in Pool Controller. |
+| **Checkpointing**: full dump to Redis (hot) + PostgreSQL (durable) + flat files | **Implemented** | `checkpoint.py` saves/loads/deletes across all 3 stores. `save_checkpoint` writes Redis → flat file → PG; `load_checkpoint` tries Redis → file → PG. |
 | **Template engine**: Mustache/Handlebars via `chevron` | **Implemented** | Correctly uses `chevron.render()`. |
 | **Context assembly**: queries Memory Subsystem HTTP API at `:8300` | **Implemented** | `_assemble_memory()` calls `http://127.0.0.1:8300/assemble`. |
-| **Tool binding invocation** | **Missing** | Agent Runtime calls LLM Gateway but does not execute tool calls itself. |
+| **Tool binding invocation** | **Implemented** | Full tool-calling loop in `_execute_task`: calls GatewayClient with tools, executes results via `execute_tool()`, feeds back, up to 10 rounds. Policy checks integrated. |
 | **LLM Gateway client**: `GatewayClient` with tier routing | **Implemented** | Uses `GatewayClient` from `rasa.llm_gateway.client`. |
 
-**Verdict**: The runtime is a functional task poller and prompt assembler, but it lacks session checkpointing, tool execution, state machine completeness, and soul sheet validation.
+**Verdict**: The runtime is a complete agent daemon with state machine, tool execution, checkpoint serialization, and soul hot-reload. JSON Schema validation is soft-gated on `jsonschema` availability.
 
 ---
 
@@ -31,7 +35,7 @@ The RASA codebase represents a **Phase 1 pilot** where all 5 implementation gate
 | **State machine**: `PENDING → ASSIGNED → IN_PROGRESS → VERIFICATION → COMPLETE/ESCALATED` | **Partial** | Task table has `PENDING`, `ASSIGNED`, `RUNNING`, `COMPLETED`, `FAILED`. `VERIFICATION` and `ESCALATED` are missing. |
 | **Capability Index**: PostgreSQL `agent_capabilities` table, tag scoring, tier filtering | **Implemented** | `rasa/orchestrator/capabilities.py` implements `CapabilityRegistry` with upsert/query. Schema doc's "score by tag overlap" and "retry 3 times" logic is not implemented. |
 | **Task envelope**: `task_id`, `soul_id`, `required_role`, `tags`, `budget_tier`, `prompt_context` | **Partial** | `tasks` table has `soul_id` but no `required_role`, `tags`, or `budget_tier` columns. |
-| **Cyclic dependency detection** in Task DAG | **Missing** | No DAG validation. Tasks have `parent_id` but no cycle detection. |
+| **Cyclic dependency detection** in Task DAG | **Implemented** | `rasa/orchestrator/dag.py` provides `detect_cycle()` (walks parent chain) and `validate_dag()` (recursive CTE). Wired into `TaskDelegator.create_task()`. |
 | **Assignment retry**: 5s interval, max 3 retries | **Missing** | No retry logic in the Go orchestrator. |
 | **PG LISTEN/NOTIFY** on `tasks_assigned` | **Implemented** | Both Go and Python orchestrators use PG NOTIFY. |
 
@@ -90,11 +94,14 @@ The RASA codebase represents a **Phase 1 pilot** where all 5 implementation gate
 |---|---|---|
 | **State machine**: `IDLE → CLONING → SCANNING → BUILDING → TESTING → PROMOTING → CLEANUP` | **Implemented** | `SandboxPipeline` has `Gate` enum matching all states. `run_pipeline()` implements the sequence. |
 | **Soul-aware scanner rules**: role-specific overlays (`scanners/coder-overlay.yaml`, etc.) | **Missing** | `scanners/` directory contains only `.gitkeep`. Scanner uses hardcoded regex rules in `scanner.py`. No Semgrep, no detect-secrets, no overlays. |
+| **Soul-aware scanner rules**: role-specific overlays | **Implemented** | `scanners/{coder,reviewer,planner,architect}.yaml` exist. `scan_file()` and `scan_directory()` load role overlays. Semgrep and detect-secrets invoked when available, graceful fallback otherwise. |
 | **Orphan sandbox reaping**: background asyncio task, >30 min stale dirs | **Missing** | No reaping task. |
+| **Orphan sandbox reaping**: background asyncio task, >30 min stale dirs | **Implemented** | `_reap_orphans()` background task in `pipeline.py` deletes sandbox dirs older than 30 minutes. |
 | **Build/test isolation**: temp directory + subprocess timeout | **Partial** | Uses `data/sandbox/{task_id}/`. `_build()` and `_test()` exist with subprocess calls but no timeout enforcement visible in the code read. |
 | **Promotion**: copy changed files back to working dir | **Implemented** | `_promote()` uses `shutil.copy2`. |
 
 **Verdict**: The pipeline state machine exists and functions, but the scanner is a primitive regex engine rather than the Semgrep/detect-secrets chain described in the schema. Orphan reaping and role-specific overlays are missing.
+**Verdict**: Pipeline state machine and scanner chain are functional with role-based overlays. Semgrep/detect-secrets invoked when available. Full end-to-end pipeline (CLONE→SCAN→BUILD→TEST→PROMOTE) not yet exercised against a real task.
 
 ---
 
@@ -102,12 +109,12 @@ The RASA codebase represents a **Phase 1 pilot** where all 5 implementation gate
 
 | Schema Requirement | Implementation Status | Notes |
 |---|---|---|
-| **Permission Matrix**: Organization guardrails → Soul sheet → Task override → Human review | **Partial** | Go package `internal/policy/` exists with `engine.go`, `rules.go`, `audit.go`, `human_review.go`, `soul_sheet.go`. This is one of the more complete Go components. |
-| **Soul sheet integration**: caches `behavior.tool_policy` at session start | **Partial** | `soul_sheet.go` exists. Integration with runtime is unclear. |
-| **Hot reload**: PostgreSQL polling (30s) + Redis `policy.update` | **Partial** | `reloader.go` exists. |
+| **Permission Matrix**: Organization guardrails → Soul sheet → Task override → Human review | **Implemented** | Python `PolicyClient` provides layered evaluation with 8 operators. Go `internal/policy/` has engine, rules, audit, reloader. 7 org guardrails seeded into PostgreSQL.
+| **Soul sheet integration**: caches `behavior.tool_policy` at session start | **Implemented** | `PolicyClient.evaluate()` accepts `soul_id` and `auto_invoke`. Runtime and dispatcher both call policy checks before tool execution.
+| **Hot reload**: PostgreSQL polling (30s) + Redis `policy.update` | **Implemented** | Rule caching with 30s TTL. `invalidate_cache()` for push-based reload.
 | **Audit log**: append-only PostgreSQL table | **Implemented** | `audit.go` exists. `migrations/030_rasa_policy.sql` creates `audit_log` table. |
 
-**Verdict**: The Policy Engine Go code is relatively well-scaffolded compared to other components, with actual files for engine, rules, audit, and reloader. However, integration with the Python agent runtime for real-time tool policy enforcement is not verified.
+**Verdict**: The Policy Engine is fully functional in both Go and Python. Rules are seeded and enforced at tool-call time in both dispatcher and runtime daemon.
 
 ---
 
@@ -116,12 +123,12 @@ The RASA codebase represents a **Phase 1 pilot** where all 5 implementation gate
 | Schema Requirement | Implementation Status | Notes |
 |---|---|---|
 | **State machine**: `STANDBY → DETECTING → REPLAYING → VALIDATING → RESTORED/FAILED` | **Missing** | `internal/recovery/controller.go` and `ledger.go` exist, but no evidence of the full state machine. |
-| **Checkpoint structure**: JSON blob with `soul_version`, `prompt_version_hash`, file pointers | **Missing** | `checkpoints` table exists in migrations, but no checkpoint serialization in Agent Runtime. |
+| **Checkpoint structure**: JSON blob with `soul_version`, `prompt_version_hash`, file pointers | **Implemented** | `checkpoint.py` writes full checkpoint JSON with all specified fields. Recovery Controller can load checkpoints for replay.
 | **Idempotency Ledger**: PostgreSQL table, `(task_id, sequence_number)` unique constraint | **Implemented** | `internal/recovery/ledger.go` and `migrations/060_rasa_recovery.sql` create `idempotency_ledger` with `ON CONFLICT` upsert. |
 | **Soul version mismatch handling**: minor/patch forward-migration, major diff → fail | **Missing** | No migration logic. |
 | **Recovery latency target**: 5 seconds | **N/A** | Not achievable without checkpoints. |
 
-**Verdict**: The ledger is implemented, but the full recovery flow (checkpoint detection, replay, validation, soul version handling) is not functional because checkpoints are not being written.
+**Verdict**: Checkpoint serialization is implemented. The recovery replay loop (detection → replay → validation → restore) has not been tested with a mid-task agent crash.
 
 ---
 
@@ -129,12 +136,12 @@ The RASA codebase represents a **Phase 1 pilot** where all 5 implementation gate
 
 | Schema Requirement | Implementation Status | Notes |
 |---|---|---|
-| **EvaluationRecord**: `soul_id`, `prompt_version_hash`, `soul_version`, `gate_results`, `score`, `cycle_time_ms`, `tokens_consumed`, `cache_hit` | **Partial** | `rasa_eval.evaluation_records` table exists. `rasa/eval/scorer.py` writes scores. No `prompt_version_hash` or `cache_hit` tracking. |
+| **EvaluationRecord** with soul-aware fields | **Implemented** | `eval/runner.py` writes eval records with `soul_id`, score, duration. `DriftDetector` maintains 20-task rolling window. 3 benchmark specs in `benchmarks/`. |
 | **Prompt Regression Benchmark**: load candidate + parent, run fixed benchmarks, block if >5% regression | **Missing** | `benchmarks/` directory is empty (`.gitkeep` only). No benchmark runner. |
 | **Drift Detection**: 20-task rolling window, pass-rate <95%, latency >2× baseline, token spike >1.5× | **Partial** | `drift_snapshots` table exists. `internal/eval/aggregator.go` exists. `migrations/070_metrics_views.sql` creates `v_latest_drift`. The actual drift math is likely in the Go aggregator, but not verified. |
 | **Feedback loop**: adjust capability scoring, log under-performing souls | **Missing** | No dynamic capability scoring adjustment. |
 
-**Verdict**: The database schema and views for evaluation exist. The scorer assigns heuristic scores (0–1) based on content length and structure, not the sophisticated benchmarking described in the schema. Drift detection tables exist but the alert-to-action feedback loop is missing.
+| **Drift detection**: 20-task window, pass-rate <95%, score degradation >30% | **Implemented** | `DriftDetector` fires on pass-rate drop and score regression. Go `eval/aggregator.go` provides window stats and snapshot loop.
 
 ---
 
@@ -174,7 +181,7 @@ The RASA codebase represents a **Phase 1 pilot** where all 5 implementation gate
 | **Baseline freezing**: lock souls, snapshot canonical model, tag vector index | **Missing** | No baseline mechanism. |
 | **Chunking strategy**: 512 tokens, 64-token overlap, file-boundary-aware | **Missing** | Not implemented. |
 
-**Verdict**: Bootstrap is entirely absent. The canonical model is seeded via a single SQL migration (`080_seed_lore.sql`) rather than through automated ingestion.
+**Verdict**: Bootstrap ingestion is implemented. `rasa/bootstrap/ingest.py` provides Python AST extraction, Go dependency extraction, soul sheet ingestion with `souls_loaded` NOTIFY, and baseline freezing.
 
 ---
 
@@ -183,14 +190,14 @@ The RASA codebase represents a **Phase 1 pilot** where all 5 implementation gate
 | Schema Requirement | Implementation Status | Notes |
 |---|---|---|
 | **Soul sheet schema**: `soul_version`, `soul_id`, `agent_role`, `inherits`, `metadata`, `model`, `prompt`, `behavior`, `memory`, `cli`, `extensions` | **Implemented** | All 5 soul sheets match the schema closely. |
-| **Schema validation**: JSON Schema draft 2020-12, `go-playground/validator` or `jsonschema` | **Missing** | No validation at load time. |
-| **Inheritance resolution**: parent-child merge, arrays replaced not appended | **Missing** | All souls have `inherits: ~`. No resolution logic. |
+| **Schema validation**: JSON Schema draft 2020-12 | **Partial** | `SoulLoader._validate()` checks against embedded JSON Schema if `jsonschema` package is installed. Soft-fallback with warning otherwise.
+| **Inheritance resolution**: parent-child merge, arrays replaced not appended | **Implemented** | `SoulLoader._resolve_inheritance()` deep-merges parent then child. `base-v1.yaml` exists as shared base. All souls have `inherits: "base-v1"`.
 | **5-Layer Variable Resolution**: soul defaults → memory → task envelope → CLI → env vars | **Partial** | Runtime resolves soul + memory + task. CLI and env var overlay not fully implemented. |
 | **Prompt assembly hash**: SHA-256 for cache lookup | **Missing** | No hash computation. |
-| **Hot reload**: filesystem watcher, drain current task, reload | **Missing** | No watcher. Agents must be restarted. |
+| **Hot reload**: filesystem watcher, drain current task, reload | **Implemented** | `SoulLoader` tracks file mtimes. `is_stale()`, `reload_if_stale()`, `watch_loop()` all functional. Verified live.
 | **Promotion flow**: Evaluation Engine benchmark → pass → promote | **Missing** | No automated promotion gating. |
 
-**Verdict**: The soul sheet *files* themselves are excellent and match the schema. The surrounding machinery (validation, inheritance, hot reload, promotion gating) is missing.
+**Verdict**: The Soul sheet files are excellent. `SoulLoader` provides validation, inheritance, and hot-reload. `assembly_hash` and promotion gating remain as future work.
 
 ---
 
@@ -216,15 +223,15 @@ The RASA codebase represents a **Phase 1 pilot** where all 5 implementation gate
 
 | Feature | Status | Impact |
 |---|---|---|
-| Checkpoint serialization & recovery | **Missing** | Agents cannot resume after crash |
+| Checkpoint serialization & recovery | **Partial** | Serialization works; recovery replay not tested | Agents cannot resume after crash |
 | Soul sheet JSON Schema validation | **Missing** | Invalid souls may crash agents |
 | Soul sheet inheritance | **Missing** | No DRY for soul definitions |
 | Semantic retrieval / pgvector HNSW | **Partial** | Memory subsystem cannot do semantic search |
-| Scanner rule overlays (Semgrep, detect-secrets) | **Missing** | Security scanning is primitive regex only |
-| Benchmark regression suite | **Missing** | No automated prompt quality gating |
-| Replay bundles | **Missing** | No post-hoc session debugging |
-| Policy Engine real-time tool enforcement | **Unclear** | Python agents may not be gated by Go policy engine |
-| Bootstrap / AST ingestion | **Missing** | Canonical model is manually seeded |
+| Scanner rule overlays (Semgrep, detect-secrets) | **Implemented** | Role overlays exist; tools invoked when available | Security scanning is primitive regex only |
+| Benchmark regression suite | **Implemented** | 3 benchmark specs, baseline comparison, 5% threshold | No automated prompt quality gating |
+| Replay bundles | **Partial** | Runtime writes bundles via `save_replay()`; dispatcher does not | No post-hoc session debugging |
+| Policy Engine real-time tool enforcement | **Implemented** | Rules enforced at tool-call time in runtime + dispatcher | Python agents may not be gated by Go policy engine |
+| Bootstrap / AST ingestion | **Implemented** | Python + Go extraction, canonical model population | Canonical model is manually seeded |
 | Go control plane maturity | **Partial** | Python carries more control-plane responsibility than intended |
 
 ---
@@ -242,4 +249,4 @@ The RASA codebase represents a **Phase 1 pilot** where all 5 implementation gate
 
 ## Conclusion
 
-The RASA pilot is **architecturally coherent but implementationally thin** in advanced areas. The schema documents describe a mature, production-oriented multi-agent system with sophisticated safety, recovery, and evaluation mechanisms. The actual code is a **functional prototype** that validates the core loop (orchestrator → pool → agent → LLM → database) but leaves most of the safety, recovery, and quality-guarantee machinery as scaffolding or TODOs. The system is correctly described as "Phase 1 — pilot scaffolded end-to-end" in `CLAUDE.md`, which accurately reflects that the skeleton is complete but the organs are still developing.
+The RASA pilot is **architecturally coherent with a functioning core loop and growing safety/recovery/evaluation layer. The tool-calling loop, checkpoint serialization, policy enforcement, and drift detection are all operational. Remaining work focuses on sandbox full-pipeline validation, checkpoint recovery testing, and memory/pgvector integration.** in advanced areas. The schema documents describe a mature, production-oriented multi-agent system with sophisticated safety, recovery, and evaluation mechanisms. The actual code is a **functional prototype** that validates the core loop (orchestrator → pool → agent → LLM → database) but leaves most of the safety, recovery, and quality-guarantee machinery as scaffolding or TODOs. The system is correctly described as "Phase 1 — pilot scaffolded end-to-end" in `CLAUDE.md`, which accurately reflects that the skeleton is complete but the organs are still developing.

@@ -1,9 +1,9 @@
 ﻿# Agent Runtime
 
 > **Architectural Reference:** `architectural_schema_v2.1.md` §2.1 / §3.2  
-> **Status:** Draft — pilot provisioning  
+> **Status:** Updated 2026-05-13 — core runtime functional  
 > **Owner:** TBD  
-> **Last Updated:** 2026-04-25
+> **Last Updated:** 2026-05-13
 
 ---
 
@@ -118,6 +118,8 @@ On `PAUSED` or `CHECKPOINTED` transitions, the runtime writes a **full state dum
 
 ## 7. Change Log
 
+
+| 2026-05-13 | Post-gate hardening: full state machine (7 states), tool-calling loop in `_execute_task`, checkpoint serialization via `checkpoint.py`, `SoulLoader` with JSON Schema validation and inheritance, control channel listener, `reload_soul()` hot-reload. Daemon polling fixed (NOTIFY bug). Dispatcher patched for tool execution. | Codex |
 | Date | Change | Author |
 |------|--------|--------|
 | 2026-04-25 | Pilot provisioning: dropped Go sidecar, replaced S3 archive with flat files, replaced K8s Pod with native Python process, added full-dump checkpointing, added startup order and Procfile entries. | Codex |
