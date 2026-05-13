@@ -1,8 +1,8 @@
 ﻿# Pilot Bootstrap — Artifacts & Configuration
 
-> **Status:** Draft — pilot scaffolding  
+> **Status:** Implemented — bootstrap pipeline functional via `rasa/bootstrap/ingest.py`  
 > **Owner:** TBD  
-> **Last Updated:** 2026-04-25
+> **Last Updated:** 2026-05-13
 
 ---
 

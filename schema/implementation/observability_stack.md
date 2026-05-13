@@ -4,7 +4,7 @@
 > **Implementation Reference:** [`agent_configuration.md`](agent_configuration.md) — soul_id and prompt_version_hash tagging   
 > **Status:** Implemented — Gates 1–5 complete  
 > **Owner:** TBD  
-> **Last Updated:** 2026-04-29
+> **Last Updated:** 2026-05-13
 
 ---
 

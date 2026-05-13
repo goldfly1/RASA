@@ -109,6 +109,37 @@ class CapabilityRegistry:
             conn.commit()
         return updated > 0
 
+    def score_match(self, task_description: str, task_title: str = '') -> list[dict]:
+        caps = self.list_capabilities()
+        results = []
+        query = (task_description +  + task_title).lower()
+        for cap in caps:
+            score = 0.0
+            desc = cap.get('description', '').lower()
+            role = cap.get('agent_role', '').lower()
+            for item in cap.get('capabilities', []):
+                name = (item.get('name', '') +  + item.get('description', '')).lower()
+                category = item.get('category', '').lower()
+                for word in query.split():
+                    if word in name or word in category:
+                        score += 1.0
+            for word in query.split():
+                if word in desc:
+                    score += 0.5
+                if word in role:
+                    score += 0.3
+            if score > 0:
+                cap['_score'] = score
+                results.append(cap)
+        results.sort(key=lambda r: r['_score'], reverse=True)
+        return results
+
+    def find_best_soul(self, task_description: str, task_title: str = '') -> str | None:
+        scored = self.score_match(task_description, task_title)
+        if not scored:
+            return None
+        return scored[0]['soul_id']
+
     def delete_capability(self, soul_id: str) -> bool:
         """Remove an agent's capability row."""
         with self._connect() as conn:

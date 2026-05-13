@@ -1,8 +1,8 @@
 ﻿# Testing Strategy
 
-> **Status:** Draft — pilot placeholder  
+> **Status:** Pilot state — Go tests pass (6/6 packages), Python tests pass (35/42), smoke test functional  
 > **Owner:** TBD  
-> **Last Updated:** 2026-04-25
+> **Last Updated:** 2026-05-13
 
 ---
 

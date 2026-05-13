@@ -194,6 +194,44 @@ class AgentRuntime:
             print(f"[{self.agent_id}] poll error: {traceback.format_exc()}", flush=True)
             return None
 
+        # No ASSIGNED task found; check for RUNNING tasks with checkpoints (crash recovery)
+        try:
+            async with await psycopg.AsyncConnection.connect(_pg_dsn("rasa_orch")) as conn:
+                async with conn.transaction():
+                    cur = await conn.execute(
+                        "SELECT id, title, description, payload FROM tasks "
+                        "WHERE soul_id = %s AND status = 'RUNNING' "
+                        "ORDER BY started_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+                        (self.soul["soul_id"],),
+                    )
+                    row = await cur.fetchone()
+                    if row is None:
+                        return None
+                    task_id = str(row[0])
+                    # Only recover if a checkpoint exists
+                    from rasa.agent.checkpoint import load_checkpoint
+                    snapshot = load_checkpoint(task_id)
+                    if snapshot is None:
+                        # No checkpoint — mark as FAILED (crashed before firstsave)
+                        await conn.execute(
+                            "UPDATE tasks SET status = 'FAILED', failed_at = NOW(), error_message = 'Crashed before checkpoint' WHERE id = %s",
+                            (task_id,),
+                        )
+                        await conn.execute("SELECT pg_notify('task_completed', %s)", (json.dumps({"task_id": task_id, "new_status": "FAILED"}),))
+                        return None
+                    payload = row[3]
+                    if isinstance(payload, str):
+                        payload = json.loads(payload)
+                    print(f"[{self.agent_id}] found crashed task {task_id[:8]} with checkpoint (turn={snapshot.get('turn', 0)}), recovering", flush=True)
+                    return {
+                        "id": task_id,
+                        "title": row[1],
+                        "description": row[2] or "",
+                        "payload": payload or {},
+                    }
+        except Exception:
+            return None
+
     def _should_checkpoint(self, turn: int) -> bool:
         interval = self.soul.get("behavior", {}).get("session", {}).get("checkpoint_interval_seconds", 30)
         # Checkpoint every N turns based on interval (rough: every ~6th turn for 30s interval at ~5s per turn)

@@ -1,7 +1,7 @@
 ﻿# Inter-Component Communication
 
 > **Architectural Reference:** `architectural_schema_v2.1.md` §4  
-> **Status:** Draft — pilot provisioning (revised for zero extra dependencies)  
+> **Status:** Pilot functional — core loop + hardening complete; see schema-vs-implementation report (revised for zero extra dependencies)  
 > **Owner:** TBD  
 > **Last Updated:** 2026-04-28
 
@@ -146,7 +146,7 @@ type Subscriber interface {
 }
 ```
 
-**Python (rasa/messaging/):**
+**Python (rasa/bus/):**
 ```python
 class Publisher:
     async def publish(self, channel: str, msg: Envelope) -> None: ...

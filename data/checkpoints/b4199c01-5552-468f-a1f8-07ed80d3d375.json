@@ -1,0 +1,20 @@
+{
+  "checkpoint_id": "a3242ed0-af85-4fe3-ba3c-dcf4b0efb411",
+  "task_id": "b4199c01-5552-468f-a1f8-07ed80d3d375",
+  "agent_id": "agent-coder-v2-dev-test",
+  "saved_at": "2026-05-13T17:34:33.085357+00:00",
+  "state": "ACTIVE",
+  "turn": 3,
+  "model": "deepseek-v4-pro",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a coder agent."
+    },
+    {
+      "role": "user",
+      "content": "Create recovery_test.txt with recovered_successfully"
+    }
+  ],
+  "memory_context": {}
+}

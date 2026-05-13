@@ -2,9 +2,9 @@
 
 > **Architectural Reference:** `architectural_schema_v2.1.md` §1 / §3  
 > **Implementation Reference:** [`agent_configuration.md`](agent_configuration.md) — soul-aware task assignment   
-> **Status:** Draft — pilot provisioning  
+> **Status:** Pilot functional — core loop + hardening complete; see schema-vs-implementation report  
 > **Owner:** TBD  
-> **Last Updated:** 2026-04-25
+> **Last Updated:** 2026-05-13
 
 ---
 

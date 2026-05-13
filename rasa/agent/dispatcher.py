@@ -28,6 +28,7 @@ import psycopg
 
 from rasa.agent.tools import execute_tool, AGENT_TOOL_DEFS
 from rasa.policy.client import get_policy_client
+from rasa.agent.replay import save_replay
 
 SOULS_DIR = Path(__file__).parent.parent.parent / "souls"
 CHECKPOINTS_DIR = Path(__file__).parent.parent.parent / "data" / "checkpoints"
@@ -300,6 +301,21 @@ async def run_task(soul_id, task_id, goal, model_override, dry_run, one_shot) ->
                 # Send NOTIFY so pool-controller/orchestrator know the task is done
                 cur.execute("SELECT pg_notify('task_completed', %s)", (json.dumps({"task_id": str(task_id), "new_status": status}),))
                 conn.commit()
+
+            # Write replay bundle for post-hoc debugging
+            try:
+                save_replay(
+                    task_id=task_id,
+                    soul_id=soul_id,
+                    soul_raw=soul,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    result=result,
+                    model=model,
+                    token_usage=result.get("usage", {}),
+                )
+            except Exception as replay_exc:
+                print(f"[dispatcher] replay save failed (non-fatal): {replay_exc}", flush=True)
 
     return {"task_id": task_id, "soul_id": soul_id, **result}
 

@@ -1,9 +1,9 @@
 ﻿# Agent Configuration & Prompt Governance
 
 > **Architectural Reference:** `architectural_schema_v2.1.md` §2.1 (Agent Taxonomy), §3.2 (Agent Session Lifecycle)
-> **Status:** Draft — pilot provisioning
+> **Status:** Pilot functional — core loop + hardening complete; see schema-vs-implementation report
 > **Owner:** TBD
-> **Last Updated:** 2026-04-25
+> **Last Updated:** 2026-05-13
 
 ---
 

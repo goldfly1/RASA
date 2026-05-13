@@ -222,26 +222,34 @@ class SandboxPipeline:
         return True
 
     async def _test(self, sandbox_dir: Path) -> tuple[bool, str]:
+        results: list[str] = []
+        all_ok = True
+
         # Run Go tests if Go module exists
         go_mod = sandbox_dir / "go.mod"
         if go_mod.exists():
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    "go", "test", "./internal/...", "-count=1", "-short",
+                    "go", "test", "./...", "-count=1", "-short",
                     cwd=str(sandbox_dir),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
                 output = stdout.decode()
-                ok = proc.returncode == 0
-                if not ok:
-                    print(f"[sandbox] test failed: {stderr.decode()[:200]}")
-                return ok, output
+                if proc.returncode != 0:
+                    err = stderr.decode()
+                    print(f"[sandbox] go test failed: {err[:200]}")
+                    results.append(f"go test: FAIL\n{err}")
+                    all_ok = False
+                else:
+                    results.append(f"go test: OK\n{output}")
             except asyncio.TimeoutError:
-                return False, "test timeout (60s)"
+                results.append("go test: timeout (60s)")
+                all_ok = False
             except Exception as exc:
-                return False, f"test error: {exc}"
+                results.append(f"go test: error {exc}")
+                all_ok = False
 
         # Run Python tests
         setup_cfg = sandbox_dir / "pyproject.toml"
@@ -249,21 +257,32 @@ class SandboxPipeline:
             try:
                 venv_python = os.environ.get("RASA_PYTHON", str(self.working_dir / ".venv" / "Scripts" / "python.exe"))
                 proc = await asyncio.create_subprocess_exec(
-                    venv_python, "-m", "pytest", "tests/", "-v", "-x", "--timeout=30",
+                    venv_python, "-m", "pytest", "tests/", "-v", "-x",
                     cwd=str(sandbox_dir),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    env={**os.environ, "RASA_DB_PASSWORD": os.environ.get("RASA_DB_PASSWORD", "")},
                 )
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
                 output = stdout.decode()
-                ok = proc.returncode == 0
-                return ok, output
+                if proc.returncode != 0:
+                    err = stderr.decode()
+                    print(f"[sandbox] pytest failed: {err[:300]}")
+                    output += "\nSTDERR:\n" + err
+                    results.append(f"pytest: FAIL\n{output}")
+                    all_ok = False
+                else:
+                    results.append(f"pytest: OK\n{output}")
             except asyncio.TimeoutError:
-                return False, "test timeout (60s)"
+                results.append("pytest: timeout (60s)")
+                all_ok = False
             except Exception as exc:
-                return False, f"test error: {exc}"
+                results.append(f"pytest: error {exc}")
+                all_ok = False
 
-        return True, "no tests configured"
+        if not results:
+            return True, "no tests configured"
+        return all_ok, "\n".join(results)
 
     async def _promote(self, sandbox_dir: Path) -> bool:
         """Copy changed files from sandbox back to working directory."""

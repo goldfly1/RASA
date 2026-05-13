@@ -301,6 +301,36 @@ async def _sweep_stale_tasks():
         await asyncio.sleep(60)  # check every minute
 
 
+async def _reconcile_canonical_model():
+    while True:
+        await asyncio.sleep(21600)
+        try:
+            from rasa.orchestrator.capabilities import CapabilityRegistry
+            from rasa.agent.soul import SoulLoader
+            reg = CapabilityRegistry()
+            loader = SoulLoader()
+            souls = loader.list_all()
+            active = set()
+            for sid in souls:
+                try:
+                    s = loader.load(sid)
+                    active.add(sid)
+                    reg.register_capability(
+                        soul_id=sid, agent_role=s.agent_role,
+                        display_name=s.name, description=s.description,
+                        capabilities=[{'name': t, 'category': 'tool'} for t in s.allowed_tools],
+                        access_level='read-write' if 'file_write' in s.allowed_tools else 'read-only',
+                    )
+                except Exception as e:
+                    print(f'[pool] reconcile fail {sid}: {e}', flush=True)
+            for cap in reg.list_capabilities():
+                if cap['soul_id'] not in active:
+                    reg.delete_capability(cap['soul_id'])
+            print(f'[pool] canonical reconciled: {len(active)} souls', flush=True)
+        except Exception as e:
+            print(f'[pool] reconcile error: {e}', flush=True)
+
+
 async def _prune_loop():
     """Periodically prune expired agent entries."""
     while True:
@@ -337,6 +367,7 @@ async def main():
     loop.create_task(_handle_raw_notify(pg_conn))
     loop.create_task(_sweep_stale_tasks())
     loop.create_task(_prune_loop())
+    loop.create_task(_reconcile_canonical_model())
 
     # Sweep stale ASSIGNED tasks so they don't get orphaned
     try:

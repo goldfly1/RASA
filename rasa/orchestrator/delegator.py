@@ -10,7 +10,11 @@ from typing import Any
 
 import psycopg
 
+import random
+
 from rasa.orchestrator.dag import detect_cycle
+from rasa.orchestrator.reviews import ReviewManager
+from rasa.orchestrator.capabilities import CapabilityRegistry
 
 
 def _dsn() -> str:
@@ -19,6 +23,21 @@ def _dsn() -> str:
     user = os.environ.get("RASA_DB_USER", "postgres")
     password = os.environ.get("RASA_DB_PASSWORD", "8764")
     return f"host={host} port={port} user={user} password={password} dbname=rasa_orch"
+
+
+def _sample_review(task_id: str, soul_id: str) -> None:
+    if random.randint(1, 20) != 1:
+        return
+    try:
+        review_mgr = ReviewManager()
+        review_mgr.create_review(
+            task_id=task_id,
+            agent_id=soul_id,
+            reason='random_sample',
+            payload={'sampling_rate': '1/20'},
+        )
+    except Exception:
+        pass
 
 
 class TaskDelegator:
@@ -39,6 +58,7 @@ class TaskDelegator:
         payload: dict | None = None,
     ) -> str:
         """Insert a PENDING task. Returns the task UUID."""
+        if not soul_id: cap_reg = CapabilityRegistry(); soul_id = cap_reg.find_best_soul(description, title) or 'coder-v2-dev'
         task_id = str(uuid.uuid4())
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -79,6 +99,7 @@ class TaskDelegator:
                     "UPDATE tasks SET status = 'ASSIGNED', assigned_at = NOW() WHERE id = %s",
                     (task_id,),
                 )
+                _sample_review(task_id, soul_id)
                 # Notify pool controller
                 cur.execute("SELECT pg_notify('tasks_assigned', %s)", (json.dumps({
                     "task_id": task_id,
