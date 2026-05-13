@@ -1,4 +1,5 @@
-from rasa.gui import run_gui
+from rasa.gui.app import RasaGUI
 
 if __name__ == "__main__":
-    run_gui()
+    app = RasaGUI()
+    app.run()
