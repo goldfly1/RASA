@@ -16,6 +16,7 @@ PHASE_COLORS = {
     "review": "#ff9800", "blocked": "#f44336", "done": "#4caf50"
 }
 PRIORITY_LABELS = {1: "! Low", 2: "!! Med", 3: "!!! High", 4: "!!!! Critical", 5: "!!!!! Blocker"}
+SERVICE_NAMES = ["PostgreSQL", "Redis", "Ollama"]
 
 
 class RasaGUI(ctk.CTk):
@@ -30,10 +31,19 @@ class RasaGUI(ctk.CTk):
         self.cli = OrchestratorCLI(output_callback=self._cli_output)
         self._msg_queue = queue.Queue()
         self._selected_project = None
+        self._service_labels = {}
 
         self._build_ui()
         self._poll_queue()
         self._refresh_projects()
+        self._refresh_activity()
+
+        # Boot sequence
+        self._msg_queue.put("\n" + "=" * 50 + "\n")
+        self._msg_queue.put("  Welcome to RASA Command Center\n")
+        self._msg_queue.put("  Type 'help' for available commands.\n")
+        self._msg_queue.put("=" * 50 + "\n\n")
+        self.after(300, self._auto_check_services)
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=0)
@@ -45,14 +55,33 @@ class RasaGUI(ctk.CTk):
         self.left.grid(row=0, column=0, sticky="nsw", padx=4, pady=4)
         self.left.grid_propagate(False)
 
-        ctk.CTkLabel(self.left, text="RASA Command Center", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(8, 4))
+        ctk.CTkLabel(self.left, text="RASA Command Center", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(8, 2))
 
-        # Launcher
-        self.launch_btn = ctk.CTkButton(self.left, text="LAUNCH ALL SERVICES", command=self._launch,
-                                        fg_color="#4caf50", hover_color="#388e3c", height=36)
-        self.launch_btn.pack(pady=6, padx=8, fill="x")
-        self.launch_status = ctk.CTkTextbox(self.left, height=80, font=ctk.CTkFont(size=10))
-        self.launch_status.pack(pady=(0, 6), padx=8, fill="x")
+        # Service status area
+        svc_header = ctk.CTkFrame(self.left, fg_color="transparent")
+        svc_header.pack(pady=(6, 2), padx=8, fill="x")
+        ctk.CTkLabel(svc_header, text="Services", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
+        self.svc_spinner = ctk.CTkLabel(svc_header, text="", font=ctk.CTkFont(size=10))
+        self.svc_spinner.pack(side="right")
+
+        svc_frame = ctk.CTkFrame(self.left, fg_color="#1a1a2e", corner_radius=6)
+        svc_frame.pack(pady=(0, 6), padx=8, fill="x")
+        for name in SERVICE_NAMES:
+            row = ctk.CTkFrame(svc_frame, fg_color="transparent")
+            row.pack(pady=2, padx=6, fill="x")
+            dot = ctk.CTkLabel(row, text="  ", width=14, height=14, corner_radius=7,
+                              fg_color="#607d8b", text_color="#607d8b")
+            dot.pack(side="left", padx=(0, 6))
+            lbl = ctk.CTkLabel(row, text=name, font=ctk.CTkFont(size=11))
+            lbl.pack(side="left")
+            status_lbl = ctk.CTkLabel(row, text="...", font=ctk.CTkFont(size=10), text_color="#607d8b")
+            status_lbl.pack(side="right")
+            self._service_labels[name] = (dot, status_lbl)
+
+        # Launch button
+        self.launch_btn = ctk.CTkButton(self.left, text="REFRESH SERVICES", command=self._launch,
+                                        fg_color="#4caf50", hover_color="#388e3c", height=32)
+        self.launch_btn.pack(pady=(0, 6), padx=8, fill="x")
 
         # Projects
         ctk.CTkLabel(self.left, text="Projects", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=8)
@@ -66,7 +95,7 @@ class RasaGUI(ctk.CTk):
         self.new_proj_entry.bind("<Return>", lambda e: self._add_project())
         ctk.CTkButton(add_frame, text="+", width=30, command=self._add_project).pack(side="right")
 
-        # --- Right panel (notebook) ---
+        # --- Right panel (tabs) ---
         self.tabview = ctk.CTkTabview(self)
         self.tabview.grid(row=0, column=1, sticky="nsew", padx=4, pady=4)
         self.tabview.add("CLI")
@@ -81,13 +110,12 @@ class RasaGUI(ctk.CTk):
 
         self.cli_output = ctk.CTkTextbox(cli_tab, font=ctk.CTkFont(family="Consolas", size=11))
         self.cli_output.grid(row=0, column=0, sticky="nsew", padx=4, pady=(4, 0))
-        self.cli_output.insert("1.0", "Type 'help' for commands.\n\n")
 
         cli_input_frame = ctk.CTkFrame(cli_tab, fg_color="transparent")
         cli_input_frame.grid(row=1, column=0, sticky="ew", padx=4, pady=4)
         cli_input_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(cli_input_frame, text=">").pack(side="left", padx=(0, 4))
-        self.cli_entry = ctk.CTkEntry(cli_input_frame, placeholder_text="submit coder-v2-dev Fix the login bug...")
+        self.cli_entry = ctk.CTkEntry(cli_input_frame, placeholder_text="Type a command or goal...")
         self.cli_entry.pack(side="left", fill="x", expand=True)
         self.cli_entry.bind("<Return>", self._cli_send)
         ctk.CTkButton(cli_input_frame, text="Send", width=50, command=lambda: self._cli_send(None)).pack(side="right", padx=(4, 0))
@@ -98,7 +126,8 @@ class RasaGUI(ctk.CTk):
         track_tab.grid_rowconfigure(0, weight=0)
         track_tab.grid_rowconfigure(1, weight=1)
 
-        self.track_header = ctk.CTkLabel(track_tab, text="Select a project", font=ctk.CTkFont(size=14, weight="bold"))
+        self.track_header = ctk.CTkLabel(track_tab, text="Select a project from the left panel",
+                                         font=ctk.CTkFont(size=14, weight="bold"))
         self.track_header.grid(row=0, column=0, sticky="w", padx=8, pady=4)
 
         self.track_frame = ctk.CTkScrollableFrame(track_tab)
@@ -140,18 +169,32 @@ class RasaGUI(ctk.CTk):
         except Exception as e:
             self._msg_queue.put(f"Error: {e}")
 
+    def _auto_check_services(self):
+        self._launch()
+        self.after(30000, self._auto_check_services)
+
     def _launch(self):
         self.launch_btn.configure(text="Checking...", state="disabled")
-        self.launch_status.delete("1.0", "end")
+        self.svc_spinner.configure(text="checking...")
         threading.Thread(target=self._launch_thread, daemon=True).start()
 
     def _launch_thread(self):
-        def progress(msg):
-            self._msg_queue.put(msg)
-        results = launch_all(progress_callback=progress)
+        results = launch_all()
+        for name, ok, msg in results:
+            self.after(0, lambda n=name, o=ok, m=msg: self._update_service(n, o, m))
         ok_count = sum(1 for _, ok, _ in results if ok)
-        self._msg_queue.put(f"\n{ok_count}/{len(results)} services reachable.")
-        self.after(0, lambda: self.launch_btn.configure(text="LAUNCH ALL SERVICES", state="normal"))
+        self.after(0, lambda: self.launch_btn.configure(text="REFRESH SERVICES", state="normal"))
+        self.after(0, lambda: self.svc_spinner.configure(text=f"{ok_count}/{len(results)} up"))
+
+    def _update_service(self, name, ok, detail):
+        if name in self._service_labels:
+            dot, lbl = self._service_labels[name]
+            if ok:
+                dot.configure(fg_color="#4caf50", text_color="#4caf50")
+                lbl.configure(text="running", text_color="#4caf50")
+            else:
+                dot.configure(fg_color="#f44336", text_color="#f44336")
+                lbl.configure(text="offline", text_color="#f44336")
 
     def _add_project(self):
         name = self.new_proj_entry.get().strip()

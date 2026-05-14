@@ -112,13 +112,13 @@ class CapabilityRegistry:
     def score_match(self, task_description: str, task_title: str = '') -> list[dict]:
         caps = self.list_capabilities()
         results = []
-        query = (task_description +  + task_title).lower()
+        query = (task_description + ' ' + task_title).lower()
         for cap in caps:
             score = 0.0
             desc = cap.get('description', '').lower()
             role = cap.get('agent_role', '').lower()
             for item in cap.get('capabilities', []):
-                name = (item.get('name', '') +  + item.get('description', '')).lower()
+                name = (item.get('name', '') + ' ' + item.get('description', '')).lower()
                 category = item.get('category', '').lower()
                 for word in query.split():
                     if word in name or word in category:
