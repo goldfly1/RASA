@@ -42,7 +42,7 @@ def _render_system_prompt(
     service_status: str = "",
 ) -> str:
     allowed = soul.get("behavior", {}).get("tool_policy", {}).get("allowed_tools", [])
-    from rasa.gui.chat import TOOL_DEFS as CHAT_TOOL_DEFS
+    from rasa.agent.tools import AGENT_TOOL_DEFS as CHAT_TOOL_DEFS
     tool_infos = []
     for t in allowed:
         if t in ORCHESTRATOR_TOOL_DEFS:

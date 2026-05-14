@@ -2,6 +2,9 @@ import customtkinter as ctk
 import threading
 import queue
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 from rasa.gui.tracker import Tracker, init_schema
 from rasa.gui.launcher import launch_all
@@ -16,7 +19,8 @@ PHASE_COLORS = {
     "review": "#ff9800", "blocked": "#f44336", "done": "#4caf50"
 }
 PRIORITY_LABELS = {1: "! Low", 2: "!! Med", 3: "!!! High", 4: "!!!! Critical", 5: "!!!!! Blocker"}
-SERVICE_NAMES = ["PostgreSQL", "Redis", "Ollama"]
+SERVICE_NAMES = ["PostgreSQL", "Redis", "Ollama", "Pool Ctrl"]
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 class RasaGUI(ctk.CTk):
@@ -32,18 +36,19 @@ class RasaGUI(ctk.CTk):
         self._msg_queue = queue.Queue()
         self._selected_project = None
         self._service_labels = {}
+        self._pool_proc = None
 
         self._build_ui()
         self._poll_queue()
         self._refresh_projects()
         self._refresh_activity()
 
-        # Boot sequence
         self._msg_queue.put("\n" + "=" * 50 + "\n")
         self._msg_queue.put("  Welcome to RASA Command Center\n")
-        self._msg_queue.put("  Type 'help' for available commands.\n")
+        self._msg_queue.put("  Type a message to talk to the Orchestrator.\n")
+        self._msg_queue.put("  Type 'help' for additional commands.\n")
         self._msg_queue.put("=" * 50 + "\n\n")
-        self.after(300, self._auto_check_services)
+        self.after(500, self._auto_check_services)
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=0)
@@ -65,7 +70,7 @@ class RasaGUI(ctk.CTk):
         self.svc_spinner.pack(side="right")
 
         svc_frame = ctk.CTkFrame(self.left, fg_color="#1a1a2e", corner_radius=6)
-        svc_frame.pack(pady=(0, 6), padx=8, fill="x")
+        svc_frame.pack(pady=(0, 2), padx=8, fill="x")
         for name in SERVICE_NAMES:
             row = ctk.CTkFrame(svc_frame, fg_color="transparent")
             row.pack(pady=2, padx=6, fill="x")
@@ -78,10 +83,15 @@ class RasaGUI(ctk.CTk):
             status_lbl.pack(side="right")
             self._service_labels[name] = (dot, status_lbl)
 
-        # Launch button
-        self.launch_btn = ctk.CTkButton(self.left, text="REFRESH SERVICES", command=self._launch,
-                                        fg_color="#4caf50", hover_color="#388e3c", height=32)
-        self.launch_btn.pack(pady=(0, 6), padx=8, fill="x")
+        # Control buttons row
+        btn_row = ctk.CTkFrame(self.left, fg_color="transparent")
+        btn_row.pack(pady=(2, 6), padx=8, fill="x")
+        self.launch_btn = ctk.CTkButton(btn_row, text="REFRESH", command=self._launch,
+                                        fg_color="#4caf50", hover_color="#388e3c", height=28)
+        self.launch_btn.pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.pool_btn = ctk.CTkButton(btn_row, text="START POOL", command=self._toggle_pool,
+                                      fg_color="#2196f3", hover_color="#1976d2", height=28)
+        self.pool_btn.pack(side="right", fill="x", expand=True, padx=(2, 0))
 
         # Projects
         ctk.CTkLabel(self.left, text="Projects", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=8)
@@ -115,7 +125,7 @@ class RasaGUI(ctk.CTk):
         cli_input_frame.grid(row=1, column=0, sticky="ew", padx=4, pady=4)
         cli_input_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(cli_input_frame, text=">").pack(side="left", padx=(0, 4))
-        self.cli_entry = ctk.CTkEntry(cli_input_frame, placeholder_text="Type a command or goal...")
+        self.cli_entry = ctk.CTkEntry(cli_input_frame, placeholder_text="Talk to the Orchestrator...")
         self.cli_entry.pack(side="left", fill="x", expand=True)
         self.cli_entry.bind("<Return>", self._cli_send)
         ctk.CTkButton(cli_input_frame, text="Send", width=50, command=lambda: self._cli_send(None)).pack(side="right", padx=(4, 0))
@@ -160,6 +170,7 @@ class RasaGUI(ctk.CTk):
         self.cli_entry.delete(0, "end")
         self.cli_output.insert("end", "> " + line + "\n")
         self.cli_output.see("end")
+        self.cli_entry.configure(state="disabled")
         threading.Thread(target=self._cli_thread, args=(line,), daemon=True).start()
 
     def _cli_thread(self, line):
@@ -168,6 +179,42 @@ class RasaGUI(ctk.CTk):
             self._msg_queue.put(result)
         except Exception as e:
             self._msg_queue.put(f"Error: {e}")
+        finally:
+            self.after(0, lambda: self.cli_entry.configure(state="normal"))
+
+    def _toggle_pool(self):
+        if self._pool_proc and self._pool_proc.poll() is None:
+            self._pool_proc.terminate()
+            self._pool_proc = None
+            self.pool_btn.configure(text="START POOL", fg_color="#2196f3")
+            self._update_service("Pool Ctrl", False, "stopped")
+            self._msg_queue.put("[system] Pool controller stopped.")
+        else:
+            self.pool_btn.configure(text="STARTING...", state="disabled")
+            self._msg_queue.put("[system] Starting pool controller...")
+            threading.Thread(target=self._start_pool_thread, daemon=True).start()
+
+    def _start_pool_thread(self):
+        try:
+            env = os.environ.copy()
+            env["RASA_DB_PASSWORD"] = os.environ.get("RASA_DB_PASSWORD", "8764")
+            env.setdefault("PYTHONPATH", str(PROJECT_ROOT))
+            creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            self._pool_proc = subprocess.Popen(
+                [sys.executable, "-m", "rasa.pool.controller"],
+                cwd=str(PROJECT_ROOT),
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+            self.after(0, lambda: self.pool_btn.configure(text="STOP POOL", fg_color="#f44336", state="normal"))
+            self.after(0, lambda: self._update_service("Pool Ctrl", True, "running"))
+            self._msg_queue.put("[system] Pool controller started (pid=" + str(self._pool_proc.pid) + ").")
+            self._msg_queue.put("[system] Agents can now process tasks. Try sending a message!")
+        except Exception as e:
+            self.after(0, lambda: self.pool_btn.configure(text="START POOL", fg_color="#2196f3", state="normal"))
+            self._msg_queue.put(f"[system] Failed to start pool controller: {e}")
 
     def _auto_check_services(self):
         self._launch()
@@ -183,8 +230,13 @@ class RasaGUI(ctk.CTk):
         for name, ok, msg in results:
             self.after(0, lambda n=name, o=ok, m=msg: self._update_service(n, o, m))
         ok_count = sum(1 for _, ok, _ in results if ok)
-        self.after(0, lambda: self.launch_btn.configure(text="REFRESH SERVICES", state="normal"))
-        self.after(0, lambda: self.svc_spinner.configure(text=f"{ok_count}/{len(results)} up"))
+        # Also check pool controller
+        pool_ok = self._pool_proc is not None and self._pool_proc.poll() is None
+        if pool_ok:
+            self.after(0, lambda: self._update_service("Pool Ctrl", True, "running"))
+            ok_count += 1
+        self.after(0, lambda: self.launch_btn.configure(text="REFRESH", state="normal"))
+        self.after(0, lambda: self.svc_spinner.configure(text=f"{ok_count}/{len(results)+1} up"))
 
     def _update_service(self, name, ok, detail):
         if name in self._service_labels:
@@ -228,7 +280,6 @@ class RasaGUI(ctk.CTk):
         for w in self.track_frame.winfo_children():
             w.destroy()
 
-        # Phase selector
         phase_frame = ctk.CTkFrame(self.track_frame, fg_color="transparent")
         phase_frame.pack(pady=4, fill="x")
         ctk.CTkLabel(phase_frame, text="Phase:").pack(side="left", padx=4)
@@ -237,7 +288,6 @@ class RasaGUI(ctk.CTk):
             ctk.CTkRadioButton(phase_frame, text=ph, variable=phase_var, value=ph,
                               command=lambda ph=ph: self._set_phase(project_id, ph)).pack(side="left", padx=2)
 
-        # Priority
         prio_frame = ctk.CTkFrame(self.track_frame, fg_color="transparent")
         prio_frame.pack(pady=4, fill="x")
         ctk.CTkLabel(prio_frame, text="Priority:").pack(side="left", padx=4)
@@ -246,7 +296,6 @@ class RasaGUI(ctk.CTk):
             ctk.CTkRadioButton(prio_frame, text=label, variable=prio_var, value=val,
                               command=lambda v=val: self._set_priority(project_id, v)).pack(side="left", padx=2)
 
-        # Notes
         ctk.CTkLabel(self.track_frame, text="Notes:").pack(anchor="w", padx=8)
         notes_box = ctk.CTkTextbox(self.track_frame, height=120)
         notes_box.pack(pady=4, padx=8, fill="x")
@@ -254,7 +303,6 @@ class RasaGUI(ctk.CTk):
         ctk.CTkButton(self.track_frame, text="Save Notes",
                       command=lambda: self._set_notes(project_id, notes_box.get("1.0", "end-1c"))).pack(pady=2)
 
-        # Tasks for this project
         ctk.CTkLabel(self.track_frame, text="Tasks:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=8, pady=(12, 2))
         tasks = self.tracker.list_tasks(project_id)
         for t in tasks:

@@ -1,24 +1,18 @@
 import json
 import os
 import sys
+import time
 
 class OrchestratorCLI:
     def __init__(self, output_callback=None):
         self.output = output_callback or print
         self._delegator = None
-        self._capabilities = None
 
     def _get_delegator(self):
         if self._delegator is None:
             from rasa.orchestrator.delegator import TaskDelegator
             self._delegator = TaskDelegator()
         return self._delegator
-
-    def _get_capabilities(self):
-        if self._capabilities is None:
-            from rasa.orchestrator.capabilities import CapabilityRegistry
-            self._capabilities = CapabilityRegistry()
-        return self._capabilities
 
     def execute(self, line):
         line = line.strip()
@@ -33,8 +27,6 @@ class OrchestratorCLI:
                 return self._help()
             elif cmd == "list":
                 return self._list_tasks(args)
-            elif cmd == "submit":
-                return self._submit(args)
             elif cmd == "status":
                 return self._status(args)
             elif cmd == "capabilities":
@@ -46,23 +38,52 @@ class OrchestratorCLI:
             elif cmd == "retry":
                 return self._retry(args)
             else:
-                return self._submit_auto(line)
+                return self._send_to_orchestrator(line)
         except Exception as e:
             return f"Error: {e}"
 
     def _help(self):
         return (
             "Commands:\n"
-            "  submit <soul> <title> [goal...]  - Create and assign a task\n"
+            "  <anything else>                    - Send message to the Orchestrator\n"
             "  list [status]                      - List recent tasks\n"
             "  status <task-id>                   - Query task status\n"
             "  capabilities                       - List agent capabilities\n"
             "  match <description>                - Find best agent for a task\n"
             "  cancel <task-id>                   - Cancel a task\n"
             "  retry <task-id>                    - Retry a failed task\n"
-            "  help                               - This message\n"
-            "  <anything else>                    - Submit as goal to default agent"
+            "  help                               - This message"
         )
+
+    def _send_to_orchestrator(self, line):
+        self.output(f"Sending to Orchestrator: {line[:80]}...")
+        d = self._get_delegator()
+        tid = d.create_task(
+            soul_id="orchestrator-v1",
+            title=line[:80],
+            description=line
+        )
+        d.assign_task(tid)
+        self.output(f"Task {tid[:8]} assigned to orchestrator-v1")
+        self.output("Waiting for orchestrator response...")
+
+        # Poll for up to 60 seconds
+        deadline = time.time() + 60.0
+        while time.time() < deadline:
+            t = d.query_task(tid)
+            if t and t.get("status") in ("COMPLETED", "FAILED", "CANCELLED"):
+                if t["status"] == "COMPLETED":
+                    result = t.get("result")
+                    if isinstance(result, dict):
+                        reply = result.get("content") or result.get("reply") or json.dumps(result, default=str)
+                        return f"Orchestrator: {reply}"
+                    return f"Orchestrator: {result}"
+                elif t["status"] == "FAILED":
+                    return f"Orchestrator failed: {t.get('error_message', 'unknown error')}"
+                else:
+                    return f"Task cancelled."
+            time.sleep(2.0)
+        return f"Orchestrator did not respond within 60s. Task {tid[:8]} is {t.get('status', '?') if t else '?'}. Check 'status {tid[:8]}' later."
 
     def _list_tasks(self, args):
         d = self._get_delegator()
@@ -77,25 +98,6 @@ class OrchestratorCLI:
             out.append(f"  [{status}] {tid}  {title}")
         return chr(10).join(out)
 
-    def _submit(self, args):
-        if len(args) < 2:
-            return "Usage: submit <soul-id> <title> [goal...]"
-        soul_id = args[0]
-        title = args[1]
-        goal = " ".join(args[2:]) if len(args) > 2 else title
-        d = self._get_delegator()
-        tid = d.create_task(soul_id=soul_id, title=title, description=goal)
-        d.assign_task(tid)
-        return f"Task created: {tid[:8]} (soul={soul_id}, {title})"
-
-    def _submit_auto(self, line):
-        d = self._get_delegator()
-        caps = self._get_capabilities()
-        best = caps.find_best_soul(line, line[:60])
-        tid = d.create_task(soul_id=best or "coder-v2-dev", title=line[:80], description=line)
-        d.assign_task(tid)
-        return f"Task {tid[:8]} -> {best or 'coder-v2-dev'} ({line[:50]}...)"
-
     def _status(self, args):
         if not args:
             return "Usage: status <task-id>"
@@ -106,7 +108,8 @@ class OrchestratorCLI:
         return json.dumps(t, indent=2, default=str)
 
     def _cap_list(self):
-        caps = self._get_capabilities()
+        from rasa.orchestrator.capabilities import CapabilityRegistry
+        caps = CapabilityRegistry()
         out = []
         for c in caps.list_capabilities():
             out.append(f"  {c['soul_id']} ({c['agent_role']}): {c['description'][:80]}")
@@ -116,7 +119,8 @@ class OrchestratorCLI:
         if not args:
             return "Usage: match <task description>"
         desc = " ".join(args)
-        caps = self._get_capabilities()
+        from rasa.orchestrator.capabilities import CapabilityRegistry
+        caps = CapabilityRegistry()
         scored = caps.score_match(desc)
         if not scored:
             return "No matching agents found."
