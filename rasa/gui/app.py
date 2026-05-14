@@ -77,7 +77,7 @@ class RasaGUI(ctk.CTk):
             dot = ctk.CTkLabel(row, text="  ", width=14, height=14, corner_radius=7,
                               fg_color="#607d8b", text_color="#607d8b")
             dot.pack(side="left", padx=(0, 6))
-            lbl = ctk.CTkLabel(row, text=name, font=ctk.CTkFont(size=11))
+            lbl = ctk.CTkLabel(row, text=name, font=ctk.CTkFont(size=14))
             lbl.pack(side="left")
             status_lbl = ctk.CTkLabel(row, text="...", font=ctk.CTkFont(size=10), text_color="#607d8b")
             status_lbl.pack(side="right")
@@ -118,7 +118,7 @@ class RasaGUI(ctk.CTk):
         cli_tab.grid_rowconfigure(0, weight=1)
         cli_tab.grid_rowconfigure(1, weight=0)
 
-        self.cli_output = ctk.CTkTextbox(cli_tab, font=ctk.CTkFont(family="Consolas", size=11))
+        self.cli_output = ctk.CTkTextbox(cli_tab, font=ctk.CTkFont(family="Consolas", size=14))
         self.cli_output.grid(row=0, column=0, sticky="nsew", padx=4, pady=(4, 0))
 
         cli_input_frame = ctk.CTkFrame(cli_tab, fg_color="transparent")
@@ -147,7 +147,7 @@ class RasaGUI(ctk.CTk):
         act_tab = self.tabview.tab("Activity")
         act_tab.grid_columnconfigure(0, weight=1)
         act_tab.grid_rowconfigure(0, weight=1)
-        self.activity_box = ctk.CTkTextbox(act_tab, font=ctk.CTkFont(family="Consolas", size=11))
+        self.activity_box = ctk.CTkTextbox(act_tab, font=ctk.CTkFont(family="Consolas", size=14))
         self.activity_box.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
 
     def _poll_queue(self):
@@ -267,7 +267,7 @@ class RasaGUI(ctk.CTk):
             frame.pack(pady=2, padx=2, fill="x")
             frame.bind("<Button-1>", lambda e, pid=p["id"]: self._select_project(pid))
             lbl = ctk.CTkLabel(frame, text=f"{p['name']}  [{p['phase']}]  {PRIORITY_LABELS.get(p['priority'], '')}",
-                              font=ctk.CTkFont(size=11))
+                              font=ctk.CTkFont(size=14))
             lbl.pack(pady=4, padx=6)
             lbl.bind("<Button-1>", lambda e, pid=p["id"]: self._select_project(pid))
 
