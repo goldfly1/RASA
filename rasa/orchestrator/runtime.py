@@ -177,9 +177,9 @@ class OrchestratorRuntime:
             if t in ORCHESTRATOR_TOOL_DEFS:
                 defs.append(ORCHESTRATOR_TOOL_DEFS[t])
             else:
-                from rasa.gui.chat import TOOL_DEFS
-                if t in TOOL_DEFS:
-                    defs.append(TOOL_DEFS[t])
+                from rasa.agent.tools import AGENT_TOOL_DEFS
+                if t in AGENT_TOOL_DEFS:
+                    defs.append(AGENT_TOOL_DEFS[t])
         return defs
 
     async def _execute_tool(self, tool_name: str, args: dict) -> dict:
@@ -386,7 +386,6 @@ class OrchestratorRuntime:
                     return {"result": "Process manager not available."}
                 try:
                     pid = await self.process_manager.start(svc)
-                    from rasa.gui.health import HealthChecker
                     await asyncio.sleep(1.0)
                     exit_code = self.process_manager.get_exit_code(svc.id)
                     if exit_code is not None:

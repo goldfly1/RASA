@@ -9,6 +9,7 @@ from pathlib import Path
 from rasa.gui.tracker import Tracker, init_schema
 from rasa.gui.launcher import launch_all
 from rasa.gui.cli import OrchestratorCLI
+from rasa.orchestrator.reviews import ReviewManager
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -19,7 +20,7 @@ PHASE_COLORS = {
     "review": "#ff9800", "blocked": "#f44336", "done": "#4caf50"
 }
 PRIORITY_LABELS = {1: "! Low", 2: "!! Med", 3: "!!! High", 4: "!!!! Critical", 5: "!!!!! Blocker"}
-SERVICE_NAMES = ["PostgreSQL", "Redis", "Ollama", "Pool Ctrl"]
+SERVICE_NAMES = ["PostgreSQL", "Redis", "Ollama", "Pool Ctrl", "Orch Daemon"]
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
@@ -49,6 +50,7 @@ class RasaGUI(ctk.CTk):
         self._msg_queue.put("  Type 'help' for additional commands.\n")
         self._msg_queue.put("=" * 50 + "\n\n")
         self.after(500, self._auto_check_services)
+        self.after(2000, self._auto_start_all)
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=0)
@@ -77,7 +79,7 @@ class RasaGUI(ctk.CTk):
             dot = ctk.CTkLabel(row, text="  ", width=14, height=14, corner_radius=7,
                               fg_color="#607d8b", text_color="#607d8b")
             dot.pack(side="left", padx=(0, 6))
-            lbl = ctk.CTkLabel(row, text=name, font=ctk.CTkFont(size=14))
+            lbl = ctk.CTkLabel(row, text=name, font=ctk.CTkFont(size=16))
             lbl.pack(side="left")
             status_lbl = ctk.CTkLabel(row, text="...", font=ctk.CTkFont(size=10), text_color="#607d8b")
             status_lbl.pack(side="right")
@@ -89,7 +91,7 @@ class RasaGUI(ctk.CTk):
         self.launch_btn = ctk.CTkButton(btn_row, text="REFRESH", command=self._launch,
                                         fg_color="#4caf50", hover_color="#388e3c", height=28)
         self.launch_btn.pack(side="left", fill="x", expand=True, padx=(0, 2))
-        self.pool_btn = ctk.CTkButton(btn_row, text="START POOL", command=self._toggle_pool,
+        self.pool_btn = ctk.CTkButton(btn_row, text='START ALL', command=self._toggle_pool,
                                       fg_color="#2196f3", hover_color="#1976d2", height=28)
         self.pool_btn.pack(side="right", fill="x", expand=True, padx=(2, 0))
 
@@ -118,7 +120,7 @@ class RasaGUI(ctk.CTk):
         cli_tab.grid_rowconfigure(0, weight=1)
         cli_tab.grid_rowconfigure(1, weight=0)
 
-        self.cli_output = ctk.CTkTextbox(cli_tab, font=ctk.CTkFont(family="Consolas", size=14))
+        self.cli_output = ctk.CTkTextbox(cli_tab, font=ctk.CTkFont(family="Consolas", size=16))
         self.cli_output.grid(row=0, column=0, sticky="nsew", padx=4, pady=(4, 0))
 
         cli_input_frame = ctk.CTkFrame(cli_tab, fg_color="transparent")
@@ -137,7 +139,7 @@ class RasaGUI(ctk.CTk):
         track_tab.grid_rowconfigure(1, weight=1)
 
         self.track_header = ctk.CTkLabel(track_tab, text="Select a project from the left panel",
-                                         font=ctk.CTkFont(size=14, weight="bold"))
+                                         font=ctk.CTkFont(size=16, weight="bold"))
         self.track_header.grid(row=0, column=0, sticky="w", padx=8, pady=4)
 
         self.track_frame = ctk.CTkScrollableFrame(track_tab)
@@ -147,7 +149,7 @@ class RasaGUI(ctk.CTk):
         act_tab = self.tabview.tab("Activity")
         act_tab.grid_columnconfigure(0, weight=1)
         act_tab.grid_rowconfigure(0, weight=1)
-        self.activity_box = ctk.CTkTextbox(act_tab, font=ctk.CTkFont(family="Consolas", size=14))
+        self.activity_box = ctk.CTkTextbox(act_tab, font=ctk.CTkFont(family="Consolas", size=16))
         self.activity_box.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
 
     def _poll_queue(self):
@@ -176,7 +178,8 @@ class RasaGUI(ctk.CTk):
     def _cli_thread(self, line):
         try:
             result = self.cli.execute(line)
-            self._msg_queue.put(result)
+            self._msg_queue.put(chr(10) + result)
+            self._msg_queue.put("=" * 58)
         except Exception as e:
             self._msg_queue.put(f"Error: {e}")
         finally:
@@ -186,13 +189,17 @@ class RasaGUI(ctk.CTk):
         if self._pool_proc and self._pool_proc.poll() is None:
             self._pool_proc.terminate()
             self._pool_proc = None
-            self.pool_btn.configure(text="START POOL", fg_color="#2196f3")
+            self.cli.stop()
+            self.pool_btn.configure(text='START ALL', fg_color="#2196f3")
             self._update_service("Pool Ctrl", False, "stopped")
-            self._msg_queue.put("[system] Pool controller stopped.")
+            self._update_service("Orch Daemon", False, "stopped")
+            self._msg_queue.put("[system] Pool controller and orchestrator daemon stopped.")
         else:
             self.pool_btn.configure(text="STARTING...", state="disabled")
-            self._msg_queue.put("[system] Starting pool controller...")
+            self._msg_queue.put("[system] Starting all services...")
             threading.Thread(target=self._start_pool_thread, daemon=True).start()
+            if not self.cli.is_running:
+                threading.Thread(target=lambda: (self.cli.start(), self._update_orch_daemon_status()), daemon=True).start()
 
     def _start_pool_thread(self):
         try:
@@ -208,17 +215,31 @@ class RasaGUI(ctk.CTk):
                 stderr=subprocess.DEVNULL,
                 creationflags=creationflags,
             )
-            self.after(0, lambda: self.pool_btn.configure(text="STOP POOL", fg_color="#f44336", state="normal"))
+            self.after(0, lambda: self.pool_btn.configure(text="STOP ALL", fg_color="#f44336", state="normal"))
             self.after(0, lambda: self._update_service("Pool Ctrl", True, "running"))
-            self._msg_queue.put("[system] Pool controller started (pid=" + str(self._pool_proc.pid) + ").")
-            self._msg_queue.put("[system] Agents can now process tasks. Try sending a message!")
+            self._msg_queue.put("[system] Pool controller started (pool pid=" + str(self._pool_proc.pid) + ").")
         except Exception as e:
-            self.after(0, lambda: self.pool_btn.configure(text="START POOL", fg_color="#2196f3", state="normal"))
+            self.after(0, lambda: self.pool_btn.configure(text='START ALL', fg_color="#2196f3", state="normal"))
             self._msg_queue.put(f"[system] Failed to start pool controller: {e}")
+
 
     def _auto_check_services(self):
         self._launch()
         self.after(30000, self._auto_check_services)
+
+    def _auto_start_all(self):
+        if not self._pool_proc or self._pool_proc.poll() is not None:
+            self._msg_queue.put("[system] Auto-starting pool controller...")
+            threading.Thread(target=self._start_pool_thread, daemon=True).start()
+        if not self.cli.is_running:
+            self._msg_queue.put("[system] Auto-starting orchestrator daemon...")
+            threading.Thread(target=lambda: (self.cli.start(), self._update_orch_daemon_status()), daemon=True).start()
+
+    def _update_orch_daemon_status(self):
+        import time
+        time.sleep(1)
+        ok = self.cli.is_running
+        self.after(0, lambda: self._update_service("Orch Daemon", ok, "running" if ok else "offline"))
 
     def _launch(self):
         self.launch_btn.configure(text="Checking...", state="disabled")
@@ -267,7 +288,7 @@ class RasaGUI(ctk.CTk):
             frame.pack(pady=2, padx=2, fill="x")
             frame.bind("<Button-1>", lambda e, pid=p["id"]: self._select_project(pid))
             lbl = ctk.CTkLabel(frame, text=f"{p['name']}  [{p['phase']}]  {PRIORITY_LABELS.get(p['priority'], '')}",
-                              font=ctk.CTkFont(size=14))
+                              font=ctk.CTkFont(size=16))
             lbl.pack(pady=4, padx=6)
             lbl.bind("<Button-1>", lambda e, pid=p["id"]: self._select_project(pid))
 
@@ -312,6 +333,29 @@ class RasaGUI(ctk.CTk):
             if t.get("orch_task_id"):
                 ctk.CTkLabel(tframe, text=f"orch:{t['orch_task_id'][:8]}",
                             font=ctk.CTkFont(size=9), text_color="gray").pack(side="right", padx=4)
+
+        # Human reviews from PostgreSQL
+        reviews = self._load_reviews()
+        if reviews:
+            ctk.CTkLabel(self.track_frame, text="Pending Reviews:",
+                        font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=8, pady=(12, 2))
+            for r in reviews:
+                rframe = ctk.CTkFrame(self.track_frame, fg_color="#3a2f1a", corner_radius=4)
+                rframe.pack(pady=2, padx=8, fill="x")
+                reason = (r.get("reason") or "")[:80]
+                agent = (r.get("agent_id") or "?")[:20]
+                created = (r.get("created_at") or "")[:16]
+                ctk.CTkLabel(rframe, text=reason,
+                            font=ctk.CTkFont(size=10), wraplength=280).pack(anchor="w", padx=4, pady=(2, 0))
+                ctk.CTkLabel(rframe, text=f"agent: {agent}  |  {created}",
+                            font=ctk.CTkFont(size=8), text_color="#ff9800").pack(anchor="w", padx=4, pady=(0, 2))
+
+    def _load_reviews(self):
+        try:
+            rm = ReviewManager()
+            return rm.get_pending_reviews(limit=20)
+        except Exception:
+            return []
 
     def _set_phase(self, pid, phase):
         self.tracker.set_phase(pid, phase)
