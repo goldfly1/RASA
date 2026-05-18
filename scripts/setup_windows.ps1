@@ -1,4 +1,4 @@
-# RASA Prerequisites Check & Bootstrap - Windows
+﻿# RASA Prerequisites Check & Bootstrap - Windows
 #   powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1
 param(
     [switch]$SkipRedis,
@@ -77,6 +77,19 @@ if (-not $SkipGo) {
 } else {
     Write-Host ""
     Write-Host "[3/6] Skipped Go" -ForegroundColor DarkGray
+}
+
+# --- Go Control Plane Build ---------------------------------------------
+if (-not $SkipGo) {
+    Write-Host ""
+    Write-Host "[3.5/6] Building Go control plane..." -ForegroundColor Yellow
+    $services = @("orchestrator", "pool-controller", "memory-controller", "recovery-controller", "eval-aggregator", "policy-engine")
+    foreach ($svc in $services) {
+        $out = Join-Path $RasaRoot "$svc.exe"
+        go build -o $out "./cmd/$svc" | Out-Null
+        Write-Host "  OK : $svc.exe" -ForegroundColor Green
+    }
+    Write-Host "DONE   : Go binaries built" -ForegroundColor Green
 }
 
 # --- NATS Server --------------------------------------------------------
@@ -176,7 +189,7 @@ Write-Host "  2. .\scripts\create_databases.ps1"
 Write-Host "  3. .\scripts\bootstrap_schema.ps1"
 Write-Host "  4. redis-server"
 Write-Host "  5. nats-server -c config\nats-server.conf"
-Write-Host "  6. go build .\cmd\orchestrator"
+Write-Host "  6. .\scripts\build.ps1          (rebuild Go binaries if needed)"
 Write-Host "  7. .venv\Scripts\activate"
 Write-Host "  8. python -m rasa.llm_gateway"
 Write-Host ""
