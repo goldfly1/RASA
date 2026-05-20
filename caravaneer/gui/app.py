@@ -188,7 +188,7 @@ def hex_to_pixel(q: int, r: int) -> tuple[float, float]:
 
 
 def build_hex_map_js(session: GameSession) -> str:
-    """Generate JavaScript to render the hex map on a canvas."""
+    """Generate clean JavaScript to render the hex map."""
     game = session.game
     galaxy = game.galaxy
     ship = session.ship
@@ -197,6 +197,7 @@ def build_hex_map_js(session: GameSession) -> str:
 
     visible = galaxy.visible_cells(session.player_id)
     ship_pos = ship.position
+    ship_px, ship_py = hex_to_pixel(ship_pos.q, ship_pos.r)
 
     cells_data = []
     for pos, cell in galaxy.cells.items():
@@ -245,256 +246,195 @@ def build_hex_map_js(session: GameSession) -> str:
     cells_json = json.dumps(cells_data)
     travel_json = json.dumps(travel_data)
     ship_q, ship_r = ship_pos.q, ship_pos.r
-    ship_px, ship_py = hex_to_pixel(ship_q, ship_r)
 
-    js = (
-        "(function() {\n"
-        "    var canvas = document.getElementById('hexcanvas');\n"
-        "    if (!canvas) return;\n"
-        "    var dpr = window.devicePixelRatio || 1;\n"
-        "    var w = canvas.clientWidth || canvas.parentElement.clientWidth || Math.max(window.innerWidth * 0.55, 300);\n"
-        "    var h = Math.max(400, window.innerHeight - 220, canvas.parentElement.clientHeight || 0);\n"
-        "    canvas.width = w * dpr;\n"
-        "    canvas.height = h * dpr;\n"
-        "    var ctx = canvas.getContext('2d');\n"
-        "    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);\n"
-        "\n"
-        "    canvas._hexData = {\n"
-        "        cells: " + cells_json + ",\n"
-        "        travel: " + travel_json + ",\n"
-        "        shipQ: " + str(ship_q) + ",\n"
-        "        shipR: " + str(ship_r) + ",\n"
-        "        shipPX: " + str(ship_px) + ",\n"
-        "        shipPY: " + str(ship_py) + ",\n"
-        "        hexSize: " + str(HEX_SIZE) + ",\n"
-        "        offsetX: w/2 - " + str(ship_px) + ",\n"
-        "        offsetY: h/2 - " + str(ship_py) + "\n"
-        "    };\n"
-        "\n"
-        "    function draw() {\n"
-        "        var data = canvas._hexData;\n"
-        "        var w2 = canvas.clientWidth || 800;\n"
-        "        var h2 = canvas.clientHeight || 400;\n"
-        "        if (w2 < 5 || h2 < 5) return;\n"
-        "        canvas.width = w2 * dpr;\n"
-        "        canvas.height = h2 * dpr;\n"
-        "        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);\n"
-        "\n"
-        "        ctx.fillStyle = '#02020a';\n"
-        "        ctx.fillRect(0, 0, w2, h2);\n"
-        "\n"
-        "        ctx.fillStyle = '#ffffff';\n"
-        "        for (var s = 0; s < 120; s++) {\n"
-        "            var sx = (s * 137.5) % w2;\n"
-        "            var sy = (s * 293.3) % h2;\n"
-        "            var br = (s % 3 === 0) ? 1.2 : 0.6;\n"
-        "            ctx.globalAlpha = (s % 7 === 0) ? 0.8 : 0.3;\n"
-        "            ctx.beginPath();\n"
-        "            ctx.arc(sx, sy, br, 0, Math.PI*2);\n"
-        "            ctx.fill();\n"
-        "        }\n"
-        "        ctx.globalAlpha = 1.0;\n"
-        "\n"
-        "        var cells   = data.cells;\n"
-        "        var travel  = data.travel;\n"
-        "        var shipQ   = data.shipQ;\n"
-        "        var shipR   = data.shipR;\n"
-        "        var shipPX  = data.shipPX;\n"
-        "        var shipPY  = data.shipPY;\n"
-        "        var hexSize = data.hexSize;\n"
-        "        var offsetX = w2/2 - shipPX;\n"
-        "        var offsetY = h2/2 - shipPY;\n"
-        "        data.offsetX = offsetX;\n"
-        "        data.offsetY = offsetY;\n"
-        "\n"
-        "        var sqrt3 = Math.sqrt(3);\n"
-        "        var hexW = hexSize * 3/2;\n"
-        "        var hexH = hexSize * sqrt3;\n"
-        "        var cols = Math.ceil(w2 / hexW) + 6;\n"
-        "        var rows = Math.ceil(h2 / hexH) + 6;\n"
-        "        var startQ = Math.floor((shipQ * hexW - w2/2) / hexW) - 3;\n"
-        "        var startR = Math.floor((shipR * sqrt3 * hexSize - h2/2) / hexH) - 3;\n"
-        "\n"
-        "        ctx.strokeStyle = 'rgba(100,140,180,0.12)';\n"
-        "        ctx.lineWidth = 0.4;\n"
-        "        for (var rq = startQ; rq < startQ + cols; rq++) {\n"
-        "            for (var rr = startR; rr < startR + rows; rr++) {\n"
-        "                var fx = shipPX + (rq - shipQ) * hexW + offsetX;\n"
-        "                var fy = shipPY + ((rr - shipR) * hexH + (rq - shipQ) * hexH/2) + offsetY;\n"
-        "                if (fx < -hexSize*2 || fx > w2 + hexSize*2 || fy < -hexSize*2 || fy > h2 + hexSize*2) continue;\n"
-        "                ctx.beginPath();\n"
-        "                for (var i = 0; i < 6; i++) {\n"
-        "                    var angle = Math.PI/180 * (60 * i);\n"
-        "                    ctx.lineTo(fx + hexSize * Math.cos(angle), fy + hexSize * Math.sin(angle));\n"
-        "                }\n"
-        "                ctx.closePath();\n"
-        "                ctx.stroke();\n"
-        "            }\n"
-        "        }\n"
-        "\n"
-        "        ctx.lineWidth = 0.8;\n"
-        "        cells.forEach(function(c) {\n"
-        "            var cx = c.x + offsetX;\n"
-        "            var cy = c.y + offsetY;\n"
-        "            if (cx < -hexSize*2.5 || cx > w2 + hexSize*2.5 || cy < -hexSize*2.5 || cy > h2 + hexSize*2.5) return;\n"
-        "            ctx.beginPath();\n"
-        "            for (var i = 0; i < 6; i++) {\n"
-        "                var angle = Math.PI/180 * (60 * i);\n"
-        "                ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));\n"
-        "            }\n"
-        "            ctx.closePath();\n"
-        "            ctx.fillStyle = c.color;\n"
-        "            ctx.fill();\n"
-        "            if (c.hazards.indexOf('nebula') !== -1) {\n"
-        "                ctx.fillStyle = 'rgba(106,13,173,0.25)';\n"
-        "                ctx.fill();\n"
-        "            }\n"
-        "            if (c.hazards.indexOf('asteroid') !== -1) {\n"
-        "                ctx.fillStyle = 'rgba(139,115,85,0.3)';\n"
-        "                ctx.fill();\n"
-        "                ctx.fillStyle = 'rgba(180,160,130,0.5)';\n"
-        "                for (var a = 0; a < 5; a++) ctx.fillRect(cx + (a*53 % 14) - 7, cy + (a*91 % 14) - 7, 1.5, 1.5);\n"
-        "            }\n"
-        "            ctx.strokeStyle = 'rgba(255,255,255,0.35)';\n"
-        "            ctx.stroke();\n"
-        "            if (c.label) {\n"
-        "                ctx.fillStyle = '#ffffff';\n"
-        "                ctx.font = (c.isShip ? 'bold ' : '') + '10px sans-serif';\n"
-        "                ctx.textAlign = 'center';\n"
-                "                ctx.textBaseline = 'middle';\n"
-                "                var name = c.label.length > 12 ? c.label.substring(0,11)+'\u2026' : c.label;\n"
-                "                ctx.fillText(name, cx, cy - 2);\n"
-                "            }\n"
-                "        });\n"
-                "\n"
-                "        ctx.lineWidth = 1.2;\n"
-                "        var reachIdx = {};\n"
-                "        for (var ti=0; ti<travel.length; ti++) {\n"
-                "            var t = travel[ti];\n"
-                "            var cx = t.x + offsetX;\n"
-                "            var cy = t.y + offsetY;\n"
-                "            if (cx < -hexSize*2 || cx > w2 + hexSize*2 || cy < -hexSize*2 || cy > h2 + hexSize*2) continue;\n"
-                "            reachIdx[t.q+':'+t.r] = ti+1;\n"
-                "\n"
-                "            ctx.strokeStyle = 'rgba(255, 180, 0, 0.75)';\n"
-                "            ctx.beginPath();\n"
-                "            for (var i = 0; i < 6; i++) {\n"
-                "                var angle = Math.PI/180 * (60 * i);\n"
-                "                ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));\n"
-                "            }\n"
-                "            ctx.closePath();\n"
-                "            ctx.stroke();\n"
-                "\n"
-                "            var bgy = cy - hexSize * 0.55;\n"
-                "            ctx.beginPath();\n"
-                "            ctx.arc(cx, bgy, 9, 0, Math.PI*2);\n"
-                "            ctx.fillStyle = 'rgba(0,0,0,0.7)';\n"
-                "            ctx.fill();\n"
-                "            ctx.strokeStyle = 'rgba(255,180,0,0.6)';\n"
-                "            ctx.lineWidth = 0.8;\n"
-                "            ctx.stroke();\n"
-                "            ctx.fillStyle = '#ffcc00';\n"
-                "            ctx.font = 'bold 10px sans-serif';\n"
-                "            ctx.textAlign = 'center';\n"
-                "            ctx.textBaseline = 'middle';\n"
-                "            ctx.fillText((ti+1).toString(), cx, bgy);\n"
-                "\n"
-                "            ctx.fillStyle = '#00ffcc';\n"
-                "            ctx.font = '9px sans-serif';\n"
-                "            ctx.fillText(t.fuelCost + '\u26fd', cx, cy + hexSize*0.85);\n"
-                "        }\n"
-                "        canvas._reachIdx = reachIdx;\n"
-                "\n"
-                "        var sx = shipPX + offsetX;\n"
-                "        var sy = shipPY + offsetY;\n"
-                "        ctx.beginPath();\n"
-                "        ctx.moveTo(sx, sy - hexSize*0.45);\n"
-                "        ctx.lineTo(sx - hexSize*0.35, sy + hexSize*0.3);\n"
-                "        ctx.lineTo(sx + hexSize*0.35, sy + hexSize*0.3);\n"
-                "        ctx.closePath();\n"
-                "        ctx.fillStyle = '#00ff88';\n"
-                "        ctx.fill();\n"
-                "        ctx.strokeStyle = '#ccffee';\n"
-                "        ctx.lineWidth = 1.5;\n"
-                "        ctx.stroke();\n"
-                "        ctx.lineWidth = 0.5;\n"
-                "\n"
-                "        ctx.fillStyle = 'rgba(0,0,0,0.6)';\n"
-                "        ctx.fillRect(w2 - 130, h2 - 28, 125, 24);\n"
-                "        ctx.fillStyle = '#00ffcc';\n"
-                "        ctx.font = '11px monospace';\n"
-        "        ctx.textAlign = 'right';\n"
-        "        ctx.fillText('Pos: ' + shipQ + ',' + shipR, w2 - 8, h2 - 12);\n"
-        "\n"
-        "        var lx = 10, ly = 10;\n"
-        "        ctx.fillStyle = 'rgba(0,0,0,0.7)';\n"
-        "        ctx.fillRect(lx-4, ly-4, 170, 100);\n"
-        "        var legendItems = [\n"
-        "            ['#ffd700', 'Star System'], ['#6a0dad', 'Nebula'], ['#8b7355', 'Asteroids'],\n"
-        "            ['#220033', 'Black Hole'], ['#00ffcc', 'Wormhole'], ['#ff2222', 'Pirate Lair'],\n"
-        "            ['#888888', 'Derelict'], ['#ff69b4', 'Anomaly']\n"
-        "        ];\n"
-        "        legendItems.forEach(function(item, i) {\n"
-        "            var row = Math.floor(i/2);\n"
-        "            var col = i % 2;\n"
-        "            var ix = lx + col*85;\n"
-        "            var iy = ly + row*14;\n"
-        "            ctx.fillStyle = item[0];\n"
-        "            ctx.fillRect(ix, iy, 10, 10);\n"
-        "            ctx.fillStyle = '#cccccc';\n"
-        "            ctx.font = '9px sans-serif';\n"
-        "            ctx.textAlign = 'left';\n"
-        "            ctx.fillText(item[1], ix+14, iy+9);\n"
-        "        });\n"
-        "    }\n"
-        "\n"
-        "    function ensureDraw() {\n"
-        "        function attemptDraw() {\n"
-        "            var w2 = canvas.clientWidth || 800;\n"
-        "            var h2 = canvas.clientHeight || 400;\n"
-        "            if (w2 > 10 && h2 > 10) {\n"
-        "                draw();\n"
-        "            } else {\n"
-        "                requestAnimationFrame(attemptDraw);\n"
-        "            }\n"
-        "        }\n"
-        "        attemptDraw();\n"
-        "        if ('ResizeObserver' in window) {\n"
-        "            var ro = new ResizeObserver(function(entries) {\n"
-        "                for (var e of entries) {\n"
-        "                    if (e.contentRect.width > 10 && e.contentRect.height > 10) { draw(); }\n"
-        "                }\n"
-        "            });\n"
-        "            ro.observe(canvas.parentElement);\n"
-        "            ro.observe(canvas);\n"
-        "        }\n"
-        "    }\n"
-        "    ensureDraw();\n"
-        "\n"
-        "    canvas.onclick = function(ev) {\n"
-        "        var data = canvas._hexData;\n"
-        "        if (!data) return;\n"
-        "        var rect = canvas.getBoundingClientRect();\n"
-        "        var lx = ev.clientX - rect.left;\n"
-        "        var ly = ev.clientY - rect.top;\n"
-        "        var offsetX = data.offsetX;\n"
-        "        var offsetY = data.offsetY;\n"
-        "        var best = null;\n"
-        "        var bestDist = 999999;\n"
-        "        for (var ti=0; ti<data.travel.length; ti++) {\n"
-        "            var t = data.travel[ti];\n"
-        "            var tx = t.x + offsetX;\n"
-        "            var ty = t.y + offsetY;\n"
-        "            var dx = lx - tx;\n"
-        "            var dy = ly - ty;\n"
-        "            var dist = Math.sqrt(dx*dx + dy*dy);\n"
-        "            if (dist < bestDist) { bestDist = dist; best = t; }\n"
-        "        }\n"
-        "        canvas._travelTarget = (best && bestDist < 30) ? best : null;\n"
-        "    };\n"
-        "})();\n"
-    )
-    return js
+    return f"""(function() {{
+    var canvas = document.getElementById('hexcanvas');
+    if (!canvas) return;
+    var dpr = window.devicePixelRatio || 1;
+    var ctx = canvas.getContext('2d');
+
+    canvas._hexData = {{
+        cells: {cells_json},
+        travel: {travel_json},
+        shipPX: {ship_px},
+        shipPY: {ship_py},
+        shipQ: {ship_q},
+        shipR: {ship_r},
+        hexSize: {HEX_SIZE}
+    }};
+
+    function draw() {{
+        var w = canvas.clientWidth || 800;
+        var h = canvas.clientHeight || 400;
+        if (w < 5 || h < 5) return;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        var data = canvas._hexData;
+        var shipPX = data.shipPX;
+        var shipPY = data.shipPY;
+        var hexSize = data.hexSize;
+        var offsetX = w/2 - shipPX;
+        var offsetY = h/2 - shipPY;
+        data.offsetX = offsetX;
+        data.offsetY = offsetY;
+
+        // Background
+        ctx.fillStyle = '#02020a';
+        ctx.fillRect(0, 0, w, h);
+
+        // Stars
+        ctx.fillStyle = '#ffffff';
+        for (var s = 0; s < 120; s++) {{
+            var sx = (s * 137.5) % w;
+            var sy = (s * 293.3) % h;
+            var br = (s % 3 === 0) ? 1.2 : 0.6;
+            ctx.globalAlpha = (s % 7 === 0) ? 0.8 : 0.3;
+            ctx.beginPath();
+            ctx.arc(sx, sy, br, 0, Math.PI*2);
+            ctx.fill();
+        }}
+        ctx.globalAlpha = 1.0;
+
+        var sqrt3 = Math.sqrt(3);
+        var hexW = hexSize * 3/2;
+        var hexH = hexSize * sqrt3;
+        var cols = Math.ceil(w / hexW) + 6;
+        var rows = Math.ceil(h / hexH) + 6;
+        var startQ = Math.floor(({ship_q} * hexW - w/2) / hexW) - 3;
+        var startR = Math.floor(({ship_r} * sqrt3 * hexSize - h/2) / hexH) - 3;
+
+        // Grid outline
+        ctx.strokeStyle = 'rgba(100,140,180,0.18)';
+        ctx.lineWidth = 0.5;
+        for (var rq = startQ; rq < startQ + cols; rq++) {{
+            for (var rr = startR; rr < startR + rows; rr++) {{
+                var fx = shipPX + (rq - {ship_q}) * hexW + offsetX;
+                var fy = shipPY + ((rr - {ship_r}) * hexH + (rq - {ship_q}) * hexH/2) + offsetY;
+                if (fx < -hexSize*2 || fx > w + hexSize*2 || fy < -hexSize*2 || fy > h + hexSize*2) continue;
+                ctx.beginPath();
+                for (var i = 0; i < 6; i++) {{
+                    var angle = Math.PI/180 * (60 * i);
+                    ctx.lineTo(fx + hexSize * Math.cos(angle), fy + hexSize * Math.sin(angle));
+                }}
+                ctx.closePath();
+                ctx.stroke();
+            }}
+        }}
+
+        // Reachable destinations — amber stroke only, no badges/icons
+        var reachIdx = {{}};
+        ctx.lineWidth = 1.0;
+        ctx.strokeStyle = 'rgba(255, 180, 0, 0.75)';
+        data.travel.forEach(function(t, ti) {{
+            var cx = t.x + offsetX;
+            var cy = t.y + offsetY;
+            if (cx < -hexSize*2 || cx > w + hexSize*2 || cy < -hexSize*2 || cy > h + hexSize*2) return;
+            reachIdx[t.q + ':' + t.r] = ti;
+            ctx.beginPath();
+            for (var i = 0; i < 6; i++) {{
+                var angle = Math.PI/180 * (60 * i);
+                ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));
+            }}
+            ctx.closePath();
+            ctx.stroke();
+        }});
+        canvas._reachIdx = reachIdx;
+
+        // Visible cells
+        ctx.lineWidth = 0.8;
+        data.cells.forEach(function(c) {{
+            var cx = c.x + offsetX;
+            var cy = c.y + offsetY;
+            if (cx < -hexSize*2.5 || cx > w + hexSize*2.5 || cy < -hexSize*2.5 || cy > h + hexSize*2.5) return;
+            ctx.beginPath();
+            for (var i = 0; i < 6; i++) {{
+                var angle = Math.PI/180 * (60 * i);
+                ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));
+            }}
+            ctx.closePath();
+            ctx.fillStyle = c.color;
+            ctx.fill();
+            if (c.hazards.indexOf('nebula') !== -1) {{
+                ctx.fillStyle = 'rgba(106,13,173,0.25)';
+                ctx.fill();
+            }}
+            if (c.hazards.indexOf('asteroid') !== -1) {{
+                ctx.fillStyle = 'rgba(139,115,85,0.3)';
+                ctx.fill();
+                ctx.fillStyle = 'rgba(180,160,130,0.5)';
+                for (var a = 0; a < 5; a++) ctx.fillRect(cx + (a*53 % 14) - 7, cy + (a*91 % 14) - 7, 1.5, 1.5);
+            }}
+            ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+            ctx.stroke();
+            if (c.label) {{
+                ctx.fillStyle = '#ffffff';
+                ctx.font = (c.isShip ? 'bold ' : '') + '10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                var name = c.label.length > 12 ? c.label.substring(0,11)+'\u2026' : c.label;
+                ctx.fillText(name, cx, cy - 2);
+            }}
+        }});
+
+        // Ship marker
+        var sx = shipPX + offsetX;
+        var sy = shipPY + offsetY;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy - hexSize*0.45);
+        ctx.lineTo(sx - hexSize*0.35, sy + hexSize*0.3);
+        ctx.lineTo(sx + hexSize*0.35, sy + hexSize*0.3);
+        ctx.closePath();
+        ctx.fillStyle = '#00ff88';
+        ctx.fill();
+        ctx.strokeStyle = '#ccffee';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    }}
+
+    function ensureDraw() {{
+        function attempt() {{
+            var w = canvas.clientWidth || 800;
+            var h = canvas.clientHeight || 400;
+            if (w > 10 && h > 10) {{ draw(); }}
+            else {{ requestAnimationFrame(attempt); }}
+        }}
+        attempt();
+        if ('ResizeObserver' in window) {{
+            var ro = new ResizeObserver(function(entries) {{
+                for (var e of entries) {{
+                    if (e.contentRect.width > 10 && e.contentRect.height > 10) {{ draw(); }}
+                }}
+            }});
+            ro.observe(canvas.parentElement);
+            ro.observe(canvas);
+        }}
+    }}
+    ensureDraw();
+
+    canvas.onclick = function(ev) {{
+        var data = canvas._hexData;
+        if (!data) return;
+        var rect = canvas.getBoundingClientRect();
+        var lx = ev.clientX - rect.left;
+        var ly = ev.clientY - rect.top;
+        var offsetX = data.offsetX;
+        var offsetY = data.offsetY;
+        var best = null;
+        var bestDist = 999999;
+        for (var ti=0; ti<data.travel.length; ti++) {{
+            var t = data.travel[ti];
+            var tx = t.x + offsetX;
+            var ty = t.y + offsetY;
+            var dx = lx - tx;
+            var dy = ly - ty;
+            var dist = Math.sqrt(dx*dx + dy*dy);
+            if (dist < bestDist) {{ bestDist = dist; best = t; }}
+        }}
+        canvas._travelTarget = (best && bestDist < data.hexSize) ? best : null;
+    }};
+}})();"""
 
 
 
@@ -632,31 +572,35 @@ async def build_game_ui(session: GameSession):
                 with ui.tab_panels(tabs, value=tab_value).classes("w-full flex-1 bg-gray-900 text-white overflow-auto"):
 
                     # ── Nav Tab (Map + Destinations) ───────────────
-                    with ui.tab_panel(nav_tab):
-                        with ui.column().classes("w-full h-full relative"):
-                            canvas_html = ui.html('''<canvas id="hexcanvas" style="width:100%;height:100%;display:block;cursor:crosshair;"></canvas>''').classes("w-full h-full")
-                            canvas_html.on("click", lambda e: handle_map_click(e, session))
-                            ui.timer(0.2, lambda: update_canvas(session), once=True)
+                    with ui.tab_panel(nav_tab).classes("h-full p-0"):
+                        with ui.row().classes("w-full h-full gap-0"):
+                            # Canvas area
+                            with ui.column().classes("flex-1 h-full relative"):
+                                canvas_html = ui.html('''<canvas id="hexcanvas" style="width:100%;height:100%;display:block;cursor:crosshair;"></canvas>''').classes("w-full h-full")
+                                canvas_html.on("click", lambda e: handle_map_click(e, session))
+                                ui.timer(0.2, lambda: update_canvas(session), once=True)
 
-                        if session.travel_options:
-                            if ship:
-                                ui.label(f"Current: [{ship.position.q},{ship.position.r}]").classes("text-sm text-gray-400 mb-2")
-                            opts = session.travel_options[:10]
-                            for i, opt in enumerate(opts, 1):
-                                tname = opt.system_name or TERRAIN_LABELS.get(opt.terrain.name if hasattr(opt.terrain, "name") else str(opt.terrain), "Deep Space")
-                                hazard_text = " | ".join(opt.hazards) if opt.hazards else ""
-                                with ui.row().classes("w-full items-center gap-1 text-sm py-1 border-b border-gray-700"):
-                                    with ui.column().classes("flex-1 min-w-0"):
-                                        ui.label(f"{i}. {tname} [{opt.destination.q},{opt.destination.r}]").classes("truncate text-gray-200")
-                                        if hazard_text:
-                                            ui.label(hazard_text).classes("text-red-400 text-xs")
-                                    ui.label(f"{opt.distance}j").classes("text-gray-500")
-                                    ui.label(f"{opt.fuel_cost:.0f}⛽").classes("text-gray-500")
-                                    ui.button("Go", on_click=lambda _, o=opt: travel_to(session, o)).props("size=sm flat color=primary")
-                            if len(session.travel_options) > 10:
-                                ui.label(f"... and {len(session.travel_options) - 10} more destinations").classes("text-sm text-gray-500 mt-1")
-                        else:
-                            ui.label("No travel options available.").classes("text-sm text-gray-500")
+                            # Destination list panel
+                            with ui.column().classes("w-56 h-full overflow-auto bg-gray-900 border-l border-gray-800 shrink-0 q-pa-sm"):
+                                if ship:
+                                    ui.label(f"📍 [{ship.position.q},{ship.position.r}]").classes("text-xs text-gray-500 mb-2")
+                                if session.travel_options:
+                                    ui.label("Destinations").classes("text-sm font-bold text-cyan-300 mb-2")
+                                    for i, opt in enumerate(session.travel_options, 1):
+                                        tname = opt.system_name or TERRAIN_LABELS.get(opt.terrain.name if hasattr(opt.terrain, "name") else str(opt.terrain), "Deep Space")
+                                        hazard_text = " | ".join(opt.hazards) if opt.hazards else ""
+                                        with ui.row().classes("w-full items-center gap-1 text-sm py-1 border-b border-gray-700"):
+                                            with ui.column().classes("flex-1 min-w-0"):
+                                                ui.label(f"{i}. {tname}").classes("truncate text-gray-200")
+                                                if hazard_text:
+                                                    ui.label(hazard_text).classes("text-red-400 text-2xs")
+                                            with ui.column().classes("items-end shrink-0"):
+                                                with ui.row().classes("items-center gap-1"):
+                                                    ui.label(f"{opt.distance}j").classes("text-gray-500 text-xs")
+                                                    ui.label(f"{opt.fuel_cost:.0f}⚡").classes("text-gray-500 text-xs")
+                                                ui.button("Go", on_click=lambda _, o=opt: travel_to(session, o)).props("size=xs flat color=primary")
+                                else:
+                                    ui.label("No travel options available.").classes("text-sm text-gray-500")
 
                     # ── System Tab ─────────────────────────────────────
                     with ui.tab_panel(system_tab):
