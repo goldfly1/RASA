@@ -188,7 +188,7 @@ def hex_to_pixel(q: int, r: int) -> tuple[float, float]:
 
 
 def build_hex_map_js(session: GameSession) -> str:
-    """Generate clean JavaScript to render the hex map."""
+    """Push fresh hex data to the browser and trigger a redraw."""
     game = session.game
     galaxy = game.galaxy
     ship = session.ship
@@ -243,200 +243,20 @@ def build_hex_map_js(session: GameSession) -> str:
             "distance": opt.distance,
         })
 
-    cells_json = json.dumps(cells_data)
-    travel_json = json.dumps(travel_data)
-    ship_q, ship_r = ship_pos.q, ship_pos.r
+    data_json = json.dumps({
+        "cells": cells_data,
+        "travel": travel_data,
+        "shipPX": ship_px,
+        "shipPY": ship_py,
+        "shipQ": ship_pos.q,
+        "shipR": ship_pos.r,
+        "hexSize": HEX_SIZE,
+    })
 
-    return f"""(function() {{
-    var canvas = document.getElementById('hexcanvas');
-    if (!canvas) return;
-    var dpr = window.devicePixelRatio || 1;
-    var ctx = canvas.getContext('2d');
-
-    canvas._hexData = {{
-        cells: {cells_json},
-        travel: {travel_json},
-        shipPX: {ship_px},
-        shipPY: {ship_py},
-        shipQ: {ship_q},
-        shipR: {ship_r},
-        hexSize: {HEX_SIZE}
-    }};
-
-    function draw() {{
-        var w = canvas.clientWidth || 800;
-        var h = canvas.clientHeight || 400;
-        if (w < 5 || h < 5) return;
-        canvas.width = w * dpr;
-        canvas.height = h * dpr;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-        var data = canvas._hexData;
-        var shipPX = data.shipPX;
-        var shipPY = data.shipPY;
-        var hexSize = data.hexSize;
-        var offsetX = w/2 - shipPX;
-        var offsetY = h/2 - shipPY;
-        data.offsetX = offsetX;
-        data.offsetY = offsetY;
-
-        // Background
-        ctx.fillStyle = '#02020a';
-        ctx.fillRect(0, 0, w, h);
-
-        // Stars
-        ctx.fillStyle = '#ffffff';
-        for (var s = 0; s < 120; s++) {{
-            var sx = (s * 137.5) % w;
-            var sy = (s * 293.3) % h;
-            var br = (s % 3 === 0) ? 1.2 : 0.6;
-            ctx.globalAlpha = (s % 7 === 0) ? 0.8 : 0.3;
-            ctx.beginPath();
-            ctx.arc(sx, sy, br, 0, Math.PI*2);
-            ctx.fill();
-        }}
-        ctx.globalAlpha = 1.0;
-
-        var sqrt3 = Math.sqrt(3);
-        var hexW = hexSize * 3/2;
-        var hexH = hexSize * sqrt3;
-        var cols = Math.ceil(w / hexW) + 6;
-        var rows = Math.ceil(h / hexH) + 6;
-        var startQ = Math.floor(({ship_q} * hexW - w/2) / hexW) - 3;
-        var startR = Math.floor(({ship_r} * sqrt3 * hexSize - h/2) / hexH) - 3;
-
-        // Grid outline
-        ctx.strokeStyle = 'rgba(100,140,180,0.18)';
-        ctx.lineWidth = 0.5;
-        for (var rq = startQ; rq < startQ + cols; rq++) {{
-            for (var rr = startR; rr < startR + rows; rr++) {{
-                var fx = shipPX + (rq - {ship_q}) * hexW + offsetX;
-                var fy = shipPY + ((rr - {ship_r}) * hexH + (rq - {ship_q}) * hexH/2) + offsetY;
-                if (fx < -hexSize*2 || fx > w + hexSize*2 || fy < -hexSize*2 || fy > h + hexSize*2) continue;
-                ctx.beginPath();
-                for (var i = 0; i < 6; i++) {{
-                    var angle = Math.PI/180 * (60 * i);
-                    ctx.lineTo(fx + hexSize * Math.cos(angle), fy + hexSize * Math.sin(angle));
-                }}
-                ctx.closePath();
-                ctx.stroke();
-            }}
-        }}
-
-        // Reachable destinations — amber stroke only, no badges/icons
-        var reachIdx = {{}};
-        ctx.lineWidth = 1.0;
-        ctx.strokeStyle = 'rgba(255, 180, 0, 0.75)';
-        data.travel.forEach(function(t, ti) {{
-            var cx = t.x + offsetX;
-            var cy = t.y + offsetY;
-            if (cx < -hexSize*2 || cx > w + hexSize*2 || cy < -hexSize*2 || cy > h + hexSize*2) return;
-            reachIdx[t.q + ':' + t.r] = ti;
-            ctx.beginPath();
-            for (var i = 0; i < 6; i++) {{
-                var angle = Math.PI/180 * (60 * i);
-                ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));
-            }}
-            ctx.closePath();
-            ctx.stroke();
-        }});
-        canvas._reachIdx = reachIdx;
-
-        // Visible cells
-        ctx.lineWidth = 0.8;
-        data.cells.forEach(function(c) {{
-            var cx = c.x + offsetX;
-            var cy = c.y + offsetY;
-            if (cx < -hexSize*2.5 || cx > w + hexSize*2.5 || cy < -hexSize*2.5 || cy > h + hexSize*2.5) return;
-            ctx.beginPath();
-            for (var i = 0; i < 6; i++) {{
-                var angle = Math.PI/180 * (60 * i);
-                ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));
-            }}
-            ctx.closePath();
-            ctx.fillStyle = c.color;
-            ctx.fill();
-            if (c.hazards.indexOf('nebula') !== -1) {{
-                ctx.fillStyle = 'rgba(106,13,173,0.25)';
-                ctx.fill();
-            }}
-            if (c.hazards.indexOf('asteroid') !== -1) {{
-                ctx.fillStyle = 'rgba(139,115,85,0.3)';
-                ctx.fill();
-                ctx.fillStyle = 'rgba(180,160,130,0.5)';
-                for (var a = 0; a < 5; a++) ctx.fillRect(cx + (a*53 % 14) - 7, cy + (a*91 % 14) - 7, 1.5, 1.5);
-            }}
-            ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-            ctx.stroke();
-            if (c.label) {{
-                ctx.fillStyle = '#ffffff';
-                ctx.font = (c.isShip ? 'bold ' : '') + '10px sans-serif';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                var name = c.label.length > 12 ? c.label.substring(0,11)+'\u2026' : c.label;
-                ctx.fillText(name, cx, cy - 2);
-            }}
-        }});
-
-        // Ship marker
-        var sx = shipPX + offsetX;
-        var sy = shipPY + offsetY;
-        ctx.beginPath();
-        ctx.moveTo(sx, sy - hexSize*0.45);
-        ctx.lineTo(sx - hexSize*0.35, sy + hexSize*0.3);
-        ctx.lineTo(sx + hexSize*0.35, sy + hexSize*0.3);
-        ctx.closePath();
-        ctx.fillStyle = '#00ff88';
-        ctx.fill();
-        ctx.strokeStyle = '#ccffee';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-    }}
-
-    function ensureDraw() {{
-        function attempt() {{
-            var w = canvas.clientWidth || 800;
-            var h = canvas.clientHeight || 400;
-            if (w > 10 && h > 10) {{ draw(); }}
-            else {{ requestAnimationFrame(attempt); }}
-        }}
-        attempt();
-        if ('ResizeObserver' in window) {{
-            var ro = new ResizeObserver(function(entries) {{
-                for (var e of entries) {{
-                    if (e.contentRect.width > 10 && e.contentRect.height > 10) {{ draw(); }}
-                }}
-            }});
-            ro.observe(canvas.parentElement);
-            ro.observe(canvas);
-        }}
-    }}
-    ensureDraw();
-
-    canvas.onclick = function(ev) {{
-        var data = canvas._hexData;
-        if (!data) return;
-        var rect = canvas.getBoundingClientRect();
-        var lx = ev.clientX - rect.left;
-        var ly = ev.clientY - rect.top;
-        var offsetX = data.offsetX;
-        var offsetY = data.offsetY;
-        var best = null;
-        var bestDist = 999999;
-        for (var ti=0; ti<data.travel.length; ti++) {{
-            var t = data.travel[ti];
-            var tx = t.x + offsetX;
-            var ty = t.y + offsetY;
-            var dx = lx - tx;
-            var dy = ly - ty;
-            var dist = Math.sqrt(dx*dx + dy*dy);
-            if (dist < bestDist) {{ bestDist = dist; best = t; }}
-        }}
-        canvas._travelTarget = (best && bestDist < data.hexSize) ? best : null;
-    }};
+    return f"""(function(){{
+    window._hexMapData = {data_json};
+    if (window.hexMapDraw) window.hexMapDraw();
 }})();"""
-
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # UI Builders
@@ -575,10 +395,9 @@ async def build_game_ui(session: GameSession):
                     with ui.tab_panel(nav_tab).classes("h-full p-0"):
                         with ui.row().classes("w-full h-full gap-0"):
                             # Canvas area
-                            with ui.column().classes("flex-1 h-full relative"):
+                            with ui.column().classes("flex-1 h-full relative").style("min-height:300px;"):
                                 canvas_html = ui.html('''<canvas id="hexcanvas" style="width:100%;height:100%;display:block;cursor:crosshair;"></canvas>''').classes("w-full h-full")
                                 canvas_html.on("click", lambda e: handle_map_click(e, session))
-                                ui.timer(0.2, lambda: update_canvas(session), once=True)
 
                             # Destination list panel
                             with ui.column().classes("w-56 h-full overflow-auto bg-gray-900 border-l border-gray-800 shrink-0 q-pa-sm"):
@@ -886,6 +705,10 @@ async def build_game_ui(session: GameSession):
                 else:
                     ui.label("No ship data.").classes("text-sm text-gray-500 q-pa-md")
 
+    # Ensure canvas is rendered if we're on the Nav tab
+    if session.active_tab == "nav":
+        update_canvas(session)
+
 
 def update_canvas(session: GameSession):
     """Update the hex map canvas via JavaScript."""
@@ -1034,6 +857,7 @@ async def index():
             body { background: #050510; margin: 0; overflow: hidden; }
             .nicegui-content { padding: 0 !important; }
             .text-sm { font-size: 0.8rem; line-height: 1rem; }
+            .text-2xs { font-size: 0.7rem; line-height: 0.85rem; }
             /* NiceGUI select dropdown text color fix */
             .q-select .q-field__native, .q-select .q-field__prefix, .q-select .q-field__suffix,
             .q-select .q-field__input { color: #ffffff !important; }
@@ -1041,6 +865,193 @@ async def index():
             .q-menu .q-item.q-item--active { background: #374151 !important; }
             .q-menu { background: #1f2937 !important; border: 1px solid #374151; }
         </style>
+        <script>
+        (function() {
+            // --- Permanent Hex Map Drawing Engine ---
+            function hexMapDraw() {
+                var canvas = document.getElementById('hexcanvas');
+                if (!canvas) return;
+                var dpr = window.devicePixelRatio || 1;
+                var ctx = canvas.getContext('2d');
+                var data = window._hexMapData;
+                if (!data) return;
+
+                var w = canvas.clientWidth || 800;
+                var h = canvas.clientHeight || 400;
+                if (w < 5 || h < 5) return;
+                canvas.width = w * dpr;
+                canvas.height = h * dpr;
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+                var shipPX = data.shipPX;
+                var shipPY = data.shipPY;
+                var shipQ = data.shipQ;
+                var shipR = data.shipR;
+                var hexSize = data.hexSize;
+                var offsetX = w/2 - shipPX;
+                var offsetY = h/2 - shipPY;
+                data.offsetX = offsetX;
+                data.offsetY = offsetY;
+
+                // Background
+                ctx.fillStyle = '#02020a';
+                ctx.fillRect(0, 0, w, h);
+
+                // Stars
+                ctx.fillStyle = '#ffffff';
+                for (var s = 0; s < 120; s++) {
+                    var sx = (s * 137.5) % w;
+                    var sy = (s * 293.3) % h;
+                    var br = (s % 3 === 0) ? 1.2 : 0.6;
+                    ctx.globalAlpha = (s % 7 === 0) ? 0.8 : 0.3;
+                    ctx.beginPath();
+                    ctx.arc(sx, sy, br, 0, Math.PI*2);
+                    ctx.fill();
+                }
+                ctx.globalAlpha = 1.0;
+
+                var sqrt3 = Math.sqrt(3);
+                var hexW = hexSize * 3/2;
+                var hexH = hexSize * sqrt3;
+                var cols = Math.ceil(w / hexW) + 6;
+                var rows = Math.ceil(h / hexH) + 6;
+                var startQ = Math.floor((shipQ * hexW - w/2) / hexW) - 3;
+                var startR = Math.floor((shipR * sqrt3 * hexSize - h/2) / hexH) - 3;
+
+                // Grid outline
+                ctx.strokeStyle = 'rgba(100,140,180,0.18)';
+                ctx.lineWidth = 0.5;
+                for (var rq = startQ; rq < startQ + cols; rq++) {
+                    for (var rr = startR; rr < startR + rows; rr++) {
+                        var fx = shipPX + (rq - shipQ) * hexW + offsetX;
+                        var fy = shipPY + ((rr - shipR) * hexH + (rq - shipQ) * hexH/2) + offsetY;
+                        if (fx < -hexSize*2 || fx > w + hexSize*2 || fy < -hexSize*2 || fy > h + hexSize*2) continue;
+                        ctx.beginPath();
+                        for (var i = 0; i < 6; i++) {
+                            var angle = Math.PI/180 * (60 * i);
+                            ctx.lineTo(fx + hexSize * Math.cos(angle), fy + hexSize * Math.sin(angle));
+                        }
+                        ctx.closePath();
+                        ctx.stroke();
+                    }
+                }
+
+                // Reachable destinations — amber stroke only
+                var reachIdx = {};
+                ctx.lineWidth = 1.0;
+                ctx.strokeStyle = 'rgba(255, 180, 0, 0.75)';
+                data.travel.forEach(function(t, ti) {
+                    var cx = t.x + offsetX;
+                    var cy = t.y + offsetY;
+                    if (cx < -hexSize*2 || cx > w + hexSize*2 || cy < -hexSize*2 || cy > h + hexSize*2) return;
+                    reachIdx[t.q + ':' + t.r] = ti;
+                    ctx.beginPath();
+                    for (var i = 0; i < 6; i++) {
+                        var angle = Math.PI/180 * (60 * i);
+                        ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));
+                    }
+                    ctx.closePath();
+                    ctx.stroke();
+                });
+                canvas._reachIdx = reachIdx;
+
+                // Visible cells
+                ctx.lineWidth = 0.8;
+                data.cells.forEach(function(c) {
+                    var cx = c.x + offsetX;
+                    var cy = c.y + offsetY;
+                    if (cx < -hexSize*2.5 || cx > w + hexSize*2.5 || cy < -hexSize*2.5 || cy > h + hexSize*2.5) return;
+                    ctx.beginPath();
+                    for (var i = 0; i < 6; i++) {
+                        var angle = Math.PI/180 * (60 * i);
+                        ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));
+                    }
+                    ctx.closePath();
+                    ctx.fillStyle = c.color;
+                    ctx.fill();
+                    if (c.hazards.indexOf('nebula') !== -1) {
+                        ctx.fillStyle = 'rgba(106,13,173,0.25)';
+                        ctx.fill();
+                    }
+                    if (c.hazards.indexOf('asteroid') !== -1) {
+                        ctx.fillStyle = 'rgba(139,115,85,0.3)';
+                        ctx.fill();
+                        ctx.fillStyle = 'rgba(180,160,130,0.5)';
+                        for (var a = 0; a < 5; a++) ctx.fillRect(cx + (a*53 % 14) - 7, cy + (a*91 % 14) - 7, 1.5, 1.5);
+                    }
+                    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+                    ctx.stroke();
+                    if (c.label) {
+                        ctx.fillStyle = '#ffffff';
+                        ctx.font = (c.isShip ? 'bold ' : '') + '10px sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        var name = c.label.length > 12 ? c.label.substring(0,11)+'\u2026' : c.label;
+                        ctx.fillText(name, cx, cy - 2);
+                    }
+                });
+
+                // Ship marker
+                var sx = shipPX + offsetX;
+                var sy = shipPY + offsetY;
+                ctx.beginPath();
+                ctx.moveTo(sx, sy - hexSize*0.45);
+                ctx.lineTo(sx - hexSize*0.35, sy + hexSize*0.3);
+                ctx.lineTo(sx + hexSize*0.35, sy + hexSize*0.3);
+                ctx.closePath();
+                ctx.fillStyle = '#00ff88';
+                ctx.fill();
+                ctx.strokeStyle = '#ccffee';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+            }
+            window.hexMapDraw = hexMapDraw;
+
+            // Canvas click handler (delegated, one-time install)
+            document.addEventListener('click', function(ev) {
+                var canvas = document.getElementById('hexcanvas');
+                if (!canvas || ev.target !== canvas) return;
+                var data = window._hexMapData;
+                if (!data || !data.offsetX) return;
+                var rect = canvas.getBoundingClientRect();
+                var lx = ev.clientX - rect.left;
+                var ly = ev.clientY - rect.top;
+                var offsetX = data.offsetX;
+                var offsetY = data.offsetY;
+                var best = null;
+                var bestDist = 999999;
+                for (var ti=0; ti<data.travel.length; ti++) {
+                    var t = data.travel[ti];
+                    var tx = t.x + offsetX;
+                    var ty = t.y + offsetY;
+                    var dx = lx - tx;
+                    var dy = ly - ty;
+                    var dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist < bestDist) { bestDist = dist; best = t; }
+                }
+                canvas._travelTarget = (best && bestDist < data.hexSize) ? best : null;
+            });
+
+            // Observe tab-panel visibility and redraw when Nav becomes visible
+            var navTabPanel = null;
+            function findNavPanel() {
+                var panels = document.querySelectorAll('.q-tab-panel');
+                for (var i=0; i<panels.length; i++) {
+                    if (panels[i].textContent && panels[i].textContent.indexOf('Destinations') !== -1) {
+                        navTabPanel = panels[i];
+                        break;
+                    }
+                }
+            }
+            var mo = new MutationObserver(function(mutations) {
+                if (!navTabPanel) findNavPanel();
+                if (navTabPanel && !navTabPanel.classList.contains('q-tab-panel--inactive')) {
+                    if (window.hexMapDraw) window.hexMapDraw();
+                }
+            });
+            mo.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
+        })();
+        </script>
     """)
 
     with ui.element("div").classes("w-full h-screen flex items-center justify-center bg-gray-950") as container:
