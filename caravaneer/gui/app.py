@@ -388,6 +388,11 @@ async def build_game_ui(session: GameSession):
                     tech_tab = ui.tab("🔬 Tech", icon="science")
                     log_tab = ui.tab("📡 Log", icon="chat")
 
+                def _on_tab_change(e):
+                    if e.value is nav_tab:
+                        ui.run_javascript("if (window.hexMapDraw && document.getElementById('hexcanvas')) window.hexMapDraw();")
+                tabs.on_value_change(_on_tab_change)
+
                 tab_value = nav_tab if session.active_tab == "nav" else system_tab if session.active_tab == "system" else market_tab if session.active_tab == "market" else intel_tab if session.active_tab == "intel" else tech_tab if session.active_tab == "tech" else log_tab
                 with ui.tab_panels(tabs, value=tab_value).classes("w-full flex-1 bg-gray-900 text-white overflow-auto"):
 
@@ -705,9 +710,8 @@ async def build_game_ui(session: GameSession):
                 else:
                     ui.label("No ship data.").classes("text-sm text-gray-500 q-pa-md")
 
-    # Ensure canvas is rendered if we're on the Nav tab
-    if session.active_tab == "nav":
-        update_canvas(session)
+    # Always push fresh hex data so it's ready when Nav is shown
+    update_canvas(session)
 
 
 def update_canvas(session: GameSession):
@@ -876,9 +880,15 @@ async def index():
                 var data = window._hexMapData;
                 if (!data) return;
 
-                var w = canvas.clientWidth || 800;
-                var h = canvas.clientHeight || 400;
-                if (w < 5 || h < 5) return;
+                var w = canvas.clientWidth;
+                var h = canvas.clientHeight;
+                if (!w || !h || w < 5 || h < 5) {
+                    // Not laid out yet; retry after next paint
+                    requestAnimationFrame(function() {
+                        if (window.hexMapDraw) window.hexMapDraw();
+                    });
+                    return;
+                }
                 canvas.width = w * dpr;
                 canvas.height = h * dpr;
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1033,24 +1043,8 @@ async def index():
             });
 
             // Observe tab-panel visibility and redraw when Nav becomes visible
-            var navTabPanel = null;
-            function findNavPanel() {
-                var panels = document.querySelectorAll('.q-tab-panel');
-                for (var i=0; i<panels.length; i++) {
-                    if (panels[i].textContent && panels[i].textContent.indexOf('Destinations') !== -1) {
-                        navTabPanel = panels[i];
-                        break;
-                    }
-                }
-            }
-            var mo = new MutationObserver(function(mutations) {
-                if (!navTabPanel) findNavPanel();
-                if (navTabPanel && !navTabPanel.classList.contains('q-tab-panel--inactive')) {
-                    if (window.hexMapDraw) window.hexMapDraw();
-                }
-            });
-            mo.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
-        })();
+            // Replaced by NiceGUI tabs.on_value_change callback for reliability
+         })();
         </script>
     """)
 
