@@ -646,7 +646,7 @@ async def build_game_ui(session: GameSession):
                         cell_sys = cell.system if cell else None
                         market = game.get_market(session.player_id) if cell_sys else None
                         with ui.column().classes("w-full flex-1 overflow-auto"):
-                            # — Cargo Manifest (shown first so Sell is visible) —
+                            # — Cargo (top of tab so Sell is visible) —
                             if ship and ship.cargo_hold:
                                 ui.label("📦 Your Cargo — Sell").classes("text-sm font-bold text-cyan-300 q-mt-sm q-mb-xs")
                                 for item in ship.cargo_hold:
@@ -656,25 +656,20 @@ async def build_game_ui(session: GameSession):
                                         mkt = game.economy.market_summary(cell_local.system)
                                         if item.good_key in mkt:
                                             current_price = mkt[item.good_key]["price"]
+                                    total_paid = item.purchase_price * item.quantity
                                     profit = (current_price - item.purchase_price) * item.quantity
                                     profit_color = "text-green-400" if profit >= 0 else "text-red-400"
                                     profit_sign = "+" if profit >= 0 else ""
                                     with ui.row().classes("w-full items-center gap-1 text-sm py-1 border-b border-gray-700"):
                                         with ui.column().classes("flex-1 min-w-0"):
                                             ui.label(f"{item.good.name}").classes("text-gray-200")
-                                            ui.label(f"Qty: {item.quantity} | Wt: {item.total_weight:.1f} | Paid: {item.purchase_price}cr").classes("text-gray-500 text-xs")
+                                            ui.label(f"Qty {item.quantity}  ·  Wt {item.total_weight:.1f}  ·  Unit {item.purchase_price}cr  ·  Total {total_paid}cr").classes("text-gray-500 text-xs")
                                         with ui.column().classes("items-end"):
                                             if current_price:
-                                                ui.label(f"Value: {current_price}cr").classes("text-gray-400")
+                                                ui.label(f"Value {current_price}cr").classes("text-gray-400")
                                                 ui.label(f"{profit_sign}{profit}cr").classes(f"{profit_color} text-xs")
                                             qty_sel = ui.select([1, 5, 10, 25, 50, "all"], value=1, label="Qty").props("dense options-dense").classes("text-sm w-20")
-                                            async def do_sell(_, gk=item.good_key, qs=qty_sel):
-                                                try:
-                                                    val = qs.value
-                                                    await sell_good(session, gk, val)
-                                                except Exception as exc:
-                                                    ui.notify(f"Sell error: {exc}", type="negative")
-                                            ui.button("Sell", on_click=do_sell).props("size=sm flat color=orange")
+                                            ui.button("Sell", on_click=lambda _, gk=item.good_key, mx=item.quantity, qs=qty_sel: _do_sell(session, gk, mx, qs)).props("size=sm flat color=orange")
                             elif ship and not ship.cargo_hold:
                                 ui.label("📦 Cargo hold empty.").classes("text-sm text-gray-500 q-mt-sm")
 
@@ -692,19 +687,13 @@ async def build_game_ui(session: GameSession):
                                             with ui.row().classes("items-center gap-1"):
                                                 ui.label(f"{info['name']}").classes("text-gray-200")
                                                 ui.label(illegal_text).classes("text-red-500 text-xs")
-                                            ui.label(f"Base: {info['base_price']}cr | {info['category']}").classes("text-gray-500 text-xs")
+                                            ui.label(f"Base {info['base_price']}cr  ·  {info['category']}").classes("text-gray-500 text-xs")
                                         with ui.column().classes("items-end"):
                                             with ui.row().classes("items-center gap-1"):
                                                 ui.label(f"{info['price']}cr").classes(trend_color)
                                                 ui.label(trend_icon).classes(trend_color)
                                             qty_select = ui.select([1, 5, 10, 25, 50, 100], value=1, label="Qty").props("dense options-dense").classes("text-sm w-20")
-                                            async def do_buy(_, gk=good_key, qs=qty_select):
-                                                try:
-                                                    val = qs.value
-                                                    await buy_good(session, gk, int(val if val is not None else 1))
-                                                except Exception as exc:
-                                                    ui.notify(f"Buy error: {exc}", type="negative")
-                                            ui.button("Buy", on_click=do_buy).props("size=sm flat color=green")
+                                            ui.button("Buy", on_click=lambda _, gk=good_key, qs=qty_select: _do_buy(session, gk, qs)).props("size=sm flat color=green")
                             elif cell_sys:
                                 ui.label("No market available.").classes("text-sm text-gray-500")
                             else:
@@ -1004,6 +993,33 @@ async def handle_keyboard(e, session: GameSession):
     """Handle global keyboard shortcuts."""
     if e.key.name == "space" and e.action == "keydown":
         await process_turn(session)
+
+
+# ── Buy / Sell helpers (called via lambda to avoid closure traps) ──
+
+async def _do_buy(session: GameSession, good_key: str, qty_select):
+    """Buy a quantity of a good. qty_select is the NiceGUI select element."""
+    val = qty_select.value
+    qty = int(val) if val is not None else 1
+    if qty <= 0:
+        ui.notify("Select a quantity greater than 0", type="warning")
+        return
+    await buy_good(session, good_key, qty)
+
+
+async def _do_sell(session: GameSession, good_key: str, max_qty: int, qty_select):
+    """Sell a quantity of a good. qty_select is the NiceGUI select element."""
+    val = qty_select.value
+    if val == "all":
+        qty = max_qty
+    else:
+        qty = int(val) if val is not None else 1
+    if qty <= 0:
+        ui.notify("Select a quantity greater than 0", type="warning")
+        return
+    if qty > max_qty:
+        qty = max_qty
+    await sell_good(session, good_key, qty)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
