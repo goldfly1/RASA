@@ -188,7 +188,7 @@ def hex_to_pixel(q: int, r: int) -> tuple[float, float]:
 
 
 def build_hex_map_js(session: GameSession) -> str:
-    """Push fresh hex data to the browser and trigger a redraw."""
+    """Generate JavaScript to render the hex map on a canvas."""
     game = session.game
     galaxy = game.galaxy
     ship = session.ship
@@ -197,7 +197,6 @@ def build_hex_map_js(session: GameSession) -> str:
 
     visible = galaxy.visible_cells(session.player_id)
     ship_pos = ship.position
-    ship_px, ship_py = hex_to_pixel(ship_pos.q, ship_pos.r)
 
     cells_data = []
     for pos, cell in galaxy.cells.items():
@@ -243,20 +242,251 @@ def build_hex_map_js(session: GameSession) -> str:
             "distance": opt.distance,
         })
 
-    data_json = json.dumps({
-        "cells": cells_data,
-        "travel": travel_data,
-        "shipPX": ship_px,
-        "shipPY": ship_py,
-        "shipQ": ship_pos.q,
-        "shipR": ship_pos.r,
-        "hexSize": HEX_SIZE,
-    })
+    cells_json = json.dumps(cells_data)
+    travel_json = json.dumps(travel_data)
+    ship_q, ship_r = ship_pos.q, ship_pos.r
+    ship_px, ship_py = hex_to_pixel(ship_q, ship_r)
 
-    return f"""(function(){{
-    window._hexMapData = {data_json};
-    if (window.hexMapDraw) window.hexMapDraw();
-}})();"""
+    return f"""
+    (function() {{
+        var canvas = document.getElementById('hexcanvas');
+        if (!canvas) return;
+        var dpr = window.devicePixelRatio || 1;
+        var rect = canvas.parentElement.getBoundingClientRect();
+        var w = rect.width;
+        var h = Math.max(400, window.innerHeight - 220);
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        var ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        // Store data on canvas for click handler
+        canvas._hexData = {{
+            cells: {cells_json},
+            travel: {travel_json},
+            shipQ: {ship_q},
+            shipR: {ship_r},
+            shipPX: {ship_px},
+            shipPY: {ship_py},
+            hexSize: {HEX_SIZE},
+            offsetX: w/2 - {ship_px},
+            offsetY: h/2 - {ship_py}
+        }};
+
+        function draw() {{
+            var data = canvas._hexData;
+            var w2 = canvas.clientWidth || 800;
+            var h2 = canvas.clientHeight || 400;
+            if (w2 < 5 || h2 < 5) return; // hidden
+            canvas.width = w2 * dpr;
+            canvas.height = h2 * dpr;
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            // Background
+            ctx.fillStyle = '#02020a';
+            ctx.fillRect(0, 0, w2, h2);
+
+            // Starfield
+            ctx.fillStyle = '#ffffff';
+            for (var s = 0; s < 120; s++) {{
+                var sx = (s * 137.5) % w2;
+                var sy = (s * 293.3) % h2;
+                var br = (s % 3 === 0) ? 1.2 : 0.6;
+                ctx.globalAlpha = (s % 7 === 0) ? 0.8 : 0.3;
+                ctx.beginPath(); ctx.arc(sx, sy, br, 0, Math.PI*2); ctx.fill();
+            }}
+            ctx.globalAlpha = 1.0;
+
+            var cells   = data.cells;
+            var travel  = data.travel;
+            var shipQ   = data.shipQ;
+            var shipR   = data.shipR;
+            var shipPX  = data.shipPX;
+            var shipPY  = data.shipPY;
+            var hexSize = data.hexSize;
+            var offsetX = w2/2 - shipPX;
+            var offsetY = h2/2 - shipPY;
+            data.offsetX = offsetX;
+            data.offsetY = offsetY;
+
+            // --- FULL HEX GRID (gameboard look) ---
+            var sqrt3 = Math.sqrt(3);
+            var hexW = hexSize * 3/2;
+            var hexH = hexSize * sqrt3;
+            var cols = Math.ceil(w2 / hexW) + 6;
+            var rows = Math.ceil(h2 / hexH) + 6;
+            var startQ = Math.floor((shipQ * hexW - w2/2) / hexW) - 3;
+            var startR = Math.floor((shipR * sqrt3 * hexSize - h2/2) / hexH) - 3;
+
+            ctx.strokeStyle = 'rgba(100,140,180,0.12)';
+            ctx.lineWidth = 0.4;
+            for (var rq = startQ; rq < startQ + cols; rq++) {{
+                for (var rr = startR; rr < startR + rows; rr++) {{
+                    var fx = shipPX + (rq - shipQ) * hexW + offsetX;
+                    var fy = shipPY + ((rr - shipR) * hexH + (rq - shipQ) * hexH/2) + offsetY;
+                    if (fx < -hexSize*2 || fx > w2 + hexSize*2 || fy < -hexSize*2 || fy > h2 + hexSize*2) continue;
+                    ctx.beginPath();
+                    for (var i = 0; i < 6; i++) {{
+                        var angle = Math.PI/180 * (60 * i);
+                        ctx.lineTo(fx + hexSize * Math.cos(angle), fy + hexSize * Math.sin(angle));
+                    }}
+                    ctx.closePath(); ctx.stroke();
+                }}
+            }}
+
+            // --- VISIBLE CELLS ---
+            ctx.lineWidth = 0.8;
+            cells.forEach(function(c) {{
+                var cx = c.x + offsetX;
+                var cy = c.y + offsetY;
+                if (cx < -hexSize*2.5 || cx > w2 + hexSize*2.5 || cy < -hexSize*2.5 || cy > h2 + hexSize*2.5) return;
+                ctx.beginPath();
+                for (var i = 0; i < 6; i++) {{
+                    var angle = Math.PI/180 * (60 * i);
+                    ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));
+                }}
+                ctx.closePath();
+                ctx.fillStyle = c.color; ctx.fill();
+                if (c.hazards.indexOf('nebula') !== -1) {{ ctx.fillStyle = 'rgba(106,13,173,0.25)'; ctx.fill(); }}
+                if (c.hazards.indexOf('asteroid') !== -1) {{
+                    ctx.fillStyle = 'rgba(139,115,85,0.3)'; ctx.fill();
+                    ctx.fillStyle = 'rgba(180,160,130,0.5)';
+                    for (var a = 0; a < 5; a++) ctx.fillRect(cx + (a*53 % 14) - 7, cy + (a*91 % 14) - 7, 1.5, 1.5);
+                }}
+                ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.stroke();
+                if (c.label) {{
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = (c.isShip ? 'bold ' : '') + '10px sans-serif';
+                    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    var name = c.label.length > 12 ? c.label.substring(0,11)+'…' : c.label;
+                    ctx.fillText(name, cx, cy - 2);
+                }}
+            }});
+
+            // --- REACHABLE DESTINATIONS ---
+            ctx.lineWidth = 1.2;
+            var reachIdx = {{}};
+            for (var ti=0; ti<travel.length; ti++) {{
+                var t = travel[ti];
+                var cx = t.x + offsetX;
+                var cy = t.y + offsetY;
+                if (cx < -hexSize*2 || cx > w2 + hexSize*2 || cy < -hexSize*2 || cy > h2 + hexSize*2) continue;
+                reachIdx[t.q+":"+t.r] = ti+1;
+
+                // Amber outline
+                ctx.strokeStyle = 'rgba(255, 180, 0, 0.75)';
+                ctx.beginPath();
+                for (var i = 0; i < 6; i++) {{
+                    var angle = Math.PI/180 * (60 * i);
+                    ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));
+                }}
+                ctx.closePath(); ctx.stroke();
+
+                // Number badge
+                var bgy = cy - hexSize * 0.55;
+                ctx.beginPath(); ctx.arc(cx, bgy, 9, 0, Math.PI*2);
+                ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fill();
+                ctx.strokeStyle = 'rgba(255,180,0,0.6)'; ctx.lineWidth = 0.8; ctx.stroke();
+                ctx.fillStyle = '#ffcc00';
+                ctx.font = 'bold 10px sans-serif';
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText((ti+1).toString(), cx, bgy);
+
+                // Fuel cost
+                ctx.fillStyle = '#00ffcc';
+                ctx.font = '9px sans-serif';
+                ctx.fillText(t.fuelCost + '⛽', cx, cy + hexSize*0.85);
+            }}
+            canvas._reachIdx = reachIdx;
+
+            // --- SHIP MARKER ---
+            var sx = shipPX + offsetX;
+            var sy = shipPY + offsetY;
+            ctx.beginPath();
+            ctx.moveTo(sx, sy - hexSize*0.45);
+            ctx.lineTo(sx - hexSize*0.35, sy + hexSize*0.3);
+            ctx.lineTo(sx + hexSize*0.35, sy + hexSize*0.3);
+            ctx.closePath();
+            ctx.fillStyle = '#00ff88'; ctx.fill();
+            ctx.strokeStyle = '#ccffee'; ctx.lineWidth = 1.5; ctx.stroke();
+            ctx.lineWidth = 0.5;
+
+            // Coord readout
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.fillRect(w2 - 130, h2 - 28, 125, 24);
+            ctx.fillStyle = '#00ffcc';
+            ctx.font = '11px monospace';
+            ctx.textAlign = 'right';
+            ctx.fillText('Pos: ' + shipQ + ',' + shipR, w2 - 8, h2 - 12);
+
+            // Legend
+            var lx = 10, ly = 10;
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(lx-4, ly-4, 170, 100);
+            var legendItems = [
+                ['#ffd700', 'Star System'], ['#6a0dad', 'Nebula'], ['#8b7355', 'Asteroids'],
+                ['#220033', 'Black Hole'], ['#00ffcc', 'Wormhole'], ['#ff2222', 'Pirate Lair'],
+                ['#888888', 'Derelict'], ['#ff69b4', 'Anomaly'],
+            ];
+            legendItems.forEach(function(item, i) {{
+                var row = Math.floor(i/2);
+                var col = i % 2;
+                var ix = lx + col*85;
+                var iy = ly + row*14;
+                ctx.fillStyle = item[0];
+                ctx.fillRect(ix, iy, 10, 10);
+                ctx.fillStyle = '#cccccc';
+                ctx.font = '9px sans-serif';
+                ctx.textAlign = 'left';
+                ctx.fillText(item[1], ix+14, iy+9);
+            }});
+        }}
+
+        function ensureDraw() {{
+            if (canvas.clientWidth < 5 || canvas.clientHeight < 5) {{
+                if ('ResizeObserver' in window) {{
+                    var ro = new ResizeObserver(function(entries) {{
+                        for (var e of entries) {{
+                            if (e.contentRect.width > 10) {{ draw(); ro.disconnect(); }}
+                        }}
+                    }});
+                    ro.observe(canvas.parentElement);
+                }} else {{
+                    setTimeout(ensureDraw, 300);
+                }}
+            }} else {{
+                draw();
+            }}
+        }}
+        ensureDraw();
+
+        // --- CLICK HANDLER: resolve nearest travel destination ---
+        canvas.onclick = function(ev) {{
+            var data = canvas._hexData;
+            if (!data) return;
+            var rect = canvas.getBoundingClientRect();
+            var lx = ev.clientX - rect.left;
+            var ly = ev.clientY - rect.top;
+            var offsetX = data.offsetX;
+            var offsetY = data.offsetY;
+            var best = null;
+            var bestDist = 999999;
+            for (var ti=0; ti<data.travel.length; ti++) {{
+                var t = data.travel[ti];
+                var tx = t.x + offsetX;
+                var ty = t.y + offsetY;
+                var dx = lx - tx;
+                var dy = ly - ty;
+                var dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < bestDist) {{ bestDist = dist; best = t; }}
+            }}
+            canvas._travelTarget = (best && bestDist < 30) ? {{q: best.q, r: best.r}} : null;
+        }};
+    }})();
+    """
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # UI Builders
@@ -299,7 +529,17 @@ def create_new_game_dialog():
 
         async def start_game():
             try:
+                # Capture all state before dialog close
+                client = ui.context.client
+                croot = client.content.default_slot.children[0]
+                landing_div = getattr(croot, '_landing', None)
+                game_div = getattr(croot, '_game_container', None)
                 dialog.close()
+                # Toggle visibility
+                if landing_div:
+                    landing_div.style("display:none")
+                if game_div:
+                    game_div.style("display:block")
                 seed = int(seed_input.value) if seed_input.value else random.randint(1, 999999)
                 session = create_new_game(
                     name=name_input.value or "Captain",
@@ -308,12 +548,10 @@ def create_new_game_dialog():
                     radius=int(radius_slider.value),
                     npcs=int(npc_slider.value),
                 )
-                client = ui.context.client
                 game_sessions[client.id] = session
-                ui.notify(f"Game started! Seed: {seed}", type="positive", color="primary")
-                await rebuild_ui(session)
-            except Exception as exc:
-                ui.notify(f"Launch failed: {exc}", type="negative")
+                await asyncio.sleep(0.05)
+                await rebuild_game_ui(session)
+            except Exception:
                 import traceback
                 traceback.print_exc()
 
@@ -324,19 +562,25 @@ def create_new_game_dialog():
     dialog.open()
 
 
-async def rebuild_ui(session: GameSession):
-    """Rebuild the entire UI after game state changes."""
-    try:
-        ui.context.client.content.clear()
-    except Exception as e:
-        ui.notify(f"Clear error: {e}", type="negative")
-    try:
-        with ui.context.client.content:
-            await build_game_ui(session)
-    except Exception as e:
-        ui.notify(f"UI build error: {e}", type="negative")
-        import traceback
-        traceback.print_exc()
+async def rebuild_game_ui(session: GameSession):
+    """Rebuild the game UI inside game_container — never touches client.content."""
+    client = ui.context.client
+    # Walk the page to find the game_container div
+    root = client.content.default_slot.children[0]
+    gc = getattr(root, '_game_container', None)
+    if gc is None:
+        print("rebuild_game_ui: no _game_container found, falling back")
+        return
+    gc.clear()
+    with gc:
+        await build_game_ui(session)
+    gc.style("display:block")
+
+
+# Legacy alias — all internal callers use rebuild_game_ui now
+async def rebuild_ui(session: GameSession, _client=None):
+    """Legacy wrapper, delegates to rebuild_game_ui."""
+    await rebuild_game_ui(session)
 
 
 async def build_game_ui(session: GameSession):
@@ -353,6 +597,22 @@ async def build_game_ui(session: GameSession):
     cell = game.galaxy.get_cell(ship.position) if ship else None
     if cell and cell.system:
         at_system = True
+
+    # ── DIAGNOSTIC ──
+    if ship:
+        cell = game.galaxy.get_cell(ship.position)
+        mkt = game.economy.market_summary(cell.system) if (cell and cell.system) else {}
+        gm = game.get_market(session.player_id)
+        merch = game.get_merchant(session.player_id)
+        msg = f"[UI] ship={ship.position} system={cell.system.name if (cell and cell.system) else 'NONE'} market_items={len(mkt)} get_market={gm is not None}({len(gm) if gm else 0}) merchant={merch.name if merch else 'NONE'}"
+        print(msg, flush=True)
+        try:
+            log_path = r"C:\Users\goldf\rasa\caravaneer_debug.log"
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(msg + "\n")
+        except Exception as e:
+            print(f"DEBUG LOG ERROR: {e}", flush=True)
+    # ─────────────────
 
     # Main outer container
     with ui.element("div").classes("w-full h-screen flex flex-col bg-gray-950 overflow-hidden") as container:
@@ -388,43 +648,35 @@ async def build_game_ui(session: GameSession):
                     tech_tab = ui.tab("🔬 Tech", icon="science")
                     log_tab = ui.tab("📡 Log", icon="chat")
 
-                def _on_tab_change(e):
-                    if e.value is nav_tab:
-                        ui.run_javascript("if (window.hexMapDraw && document.getElementById('hexcanvas')) window.hexMapDraw();")
-                tabs.on_value_change(_on_tab_change)
-
                 tab_value = nav_tab if session.active_tab == "nav" else system_tab if session.active_tab == "system" else market_tab if session.active_tab == "market" else intel_tab if session.active_tab == "intel" else tech_tab if session.active_tab == "tech" else log_tab
                 with ui.tab_panels(tabs, value=tab_value).classes("w-full flex-1 bg-gray-900 text-white overflow-auto"):
 
                     # ── Nav Tab (Map + Destinations) ───────────────
-                    with ui.tab_panel(nav_tab).classes("h-full p-0"):
-                        with ui.row().classes("w-full h-full gap-0"):
-                            # Canvas area
-                            with ui.column().classes("flex-1 h-full relative").style("min-height:300px;"):
-                                canvas_html = ui.html('''<canvas id="hexcanvas" style="width:100%;height:100%;display:block;cursor:crosshair;"></canvas>''').classes("w-full h-full")
-                                canvas_html.on("click", lambda e: handle_map_click(e, session))
+                    with ui.tab_panel(nav_tab):
+                        with ui.column().classes("w-full h-full relative"):
+                            canvas_html = ui.html('''<canvas id="hexcanvas" style="width:100%;height:100%;display:block;cursor:crosshair;"></canvas>''').classes("w-full h-full")
+                            canvas_html.on("click", lambda e: handle_map_click(e, session))
+                            ui.timer(0.2, lambda: update_canvas(session), once=True)
 
-                            # Destination list panel
-                            with ui.column().classes("w-56 h-full overflow-auto bg-gray-900 border-l border-gray-800 shrink-0 q-pa-sm"):
-                                if ship:
-                                    ui.label(f"📍 [{ship.position.q},{ship.position.r}]").classes("text-xs text-gray-500 mb-2")
-                                if session.travel_options:
-                                    ui.label("Destinations").classes("text-sm font-bold text-cyan-300 mb-2")
-                                    for i, opt in enumerate(session.travel_options, 1):
-                                        tname = opt.system_name or TERRAIN_LABELS.get(opt.terrain.name if hasattr(opt.terrain, "name") else str(opt.terrain), "Deep Space")
-                                        hazard_text = " | ".join(opt.hazards) if opt.hazards else ""
-                                        with ui.row().classes("w-full items-center gap-1 text-sm py-1 border-b border-gray-700"):
-                                            with ui.column().classes("flex-1 min-w-0"):
-                                                ui.label(f"{i}. {tname}").classes("truncate text-gray-200")
-                                                if hazard_text:
-                                                    ui.label(hazard_text).classes("text-red-400 text-2xs")
-                                            with ui.column().classes("items-end shrink-0"):
-                                                with ui.row().classes("items-center gap-1"):
-                                                    ui.label(f"{opt.distance}j").classes("text-gray-500 text-xs")
-                                                    ui.label(f"{opt.fuel_cost:.0f}⚡").classes("text-gray-500 text-xs")
-                                                ui.button("Go", on_click=lambda _, o=opt: travel_to(session, o)).props("size=xs flat color=primary")
-                                else:
-                                    ui.label("No travel options available.").classes("text-sm text-gray-500")
+                        if session.travel_options:
+                            if ship:
+                                ui.label(f"Current: [{ship.position.q},{ship.position.r}]").classes("text-sm text-gray-400 mb-2")
+                            opts = session.travel_options[:10]
+                            for i, opt in enumerate(opts, 1):
+                                tname = opt.system_name or TERRAIN_LABELS.get(opt.terrain.name if hasattr(opt.terrain, "name") else str(opt.terrain), "Deep Space")
+                                hazard_text = " | ".join(opt.hazards) if opt.hazards else ""
+                                with ui.row().classes("w-full items-center gap-1 text-sm py-1 border-b border-gray-700"):
+                                    with ui.column().classes("flex-1 min-w-0"):
+                                        ui.label(f"{i}. {tname} [{opt.destination.q},{opt.destination.r}]").classes("truncate text-gray-200")
+                                        if hazard_text:
+                                            ui.label(hazard_text).classes("text-red-400 text-xs")
+                                    ui.label(f"{opt.distance}j").classes("text-gray-500")
+                                    ui.label(f"{opt.fuel_cost:.0f}⛽").classes("text-gray-500")
+                                    ui.button("Go", on_click=lambda _, o=opt: travel_to(session, o)).props("size=sm flat color=primary")
+                            if len(session.travel_options) > 10:
+                                ui.label(f"... and {len(session.travel_options) - 10} more destinations").classes("text-sm text-gray-500 mt-1")
+                        else:
+                            ui.label("No travel options available.").classes("text-sm text-gray-500")
 
                     # ── System Tab ─────────────────────────────────────
                     with ui.tab_panel(system_tab):
@@ -466,62 +718,55 @@ async def build_game_ui(session: GameSession):
                             ui.label("Deep space — no system here.").classes("text-sm text-gray-500 q-pa-md")
 
                     # ── Market Tab ─────────────────────────────────────
-                    with ui.tab_panel(market_tab).classes("h-full flex flex-col"):
-                        cell_sys = cell.system if cell else None
-                        market = game.get_market(session.player_id) if cell_sys else None
-                        with ui.column().classes("w-full flex-1 overflow-auto"):
-                            # — Cargo (top of tab so Sell is visible) —
-                            if ship and ship.cargo_hold:
-                                ui.label("📦 Your Cargo — Sell").classes("text-sm font-bold text-cyan-300 q-mt-sm q-mb-xs")
-                                for item in ship.cargo_hold:
-                                    current_price = 0
-                                    cell_local = game.galaxy.get_cell(ship.position)
-                                    if cell_local and cell_local.system:
-                                        mkt = game.economy.market_summary(cell_local.system)
-                                        if item.good_key in mkt:
-                                            current_price = mkt[item.good_key]["price"]
-                                    total_paid = item.purchase_price * item.quantity
-                                    profit = (current_price - item.purchase_price) * item.quantity
-                                    profit_color = "text-green-400" if profit >= 0 else "text-red-400"
-                                    profit_sign = "+" if profit >= 0 else ""
-                                    with ui.row().classes("w-full items-center gap-1 text-sm py-1 border-b border-gray-700"):
-                                        with ui.column().classes("flex-1 min-w-0"):
-                                            ui.label(f"{item.good.name}").classes("text-gray-200")
-                                            ui.label(f"Qty {item.quantity}  ·  Wt {item.total_weight:.1f}  ·  Unit {item.purchase_price}cr  ·  Total {total_paid}cr").classes("text-gray-500 text-xs")
-                                        with ui.column().classes("items-end"):
-                                            if current_price:
-                                                ui.label(f"Value {current_price}cr").classes("text-gray-400")
-                                                ui.label(f"{profit_sign}{profit}cr").classes(f"{profit_color} text-xs")
-                                            qty_sel = ui.select([1, 5, 10, 25, 50, "all"], value=1, label="Qty").props("dense options-dense").classes("text-sm w-20")
-                                            ui.button("Sell", on_click=lambda _, gk=item.good_key, mx=item.quantity, qs=qty_sel: _do_sell(session, gk, mx, qs)).props("size=sm flat color=orange")
-                            elif ship and not ship.cargo_hold:
-                                ui.label("📦 Cargo hold empty.").classes("text-sm text-gray-500 q-mt-sm")
+                    with ui.tab_panel(market_tab):
+                        with ui.row().classes("w-full gap-2"):
+                            # ── Buy Column ──
+                            with ui.column().classes("flex-1 min-w-0"):
+                                ui.label("🛒 Buy").classes("text-sm font-bold text-amber-300 q-mb-xs")
+                                if cell and cell.system:
+                                    market = game.get_market(session.player_id)
+                                    if market:
+                                        for good_key, info in market.items():
+                                            trend_icon = "▲" if info["trend"] == "up" else "▼" if info["trend"] == "down" else "→"
+                                            trend_color = "text-red-400" if info["trend"] == "up" else "text-green-400" if info["trend"] == "down" else "text-gray-400"
+                                            illegal_text = "⚠️ Illegal" if info["illegal"] else ""
+                                            with ui.row().classes("w-full items-center gap-1 text-xs py-0.5 border-b border-gray-800"):
+                                                with ui.column().classes("flex-1 min-w-0"):
+                                                    with ui.row().classes("items-center gap-1"):
+                                                        ui.label(f"{info['name']}").classes("text-gray-200 text-xs")
+                                                        ui.label(illegal_text).classes("text-red-500 text-[10px]")
+                                                    ui.label(f"{info['price']}cr").classes(f"{trend_color} text-xs")
+                                                qty_select = ui.select([1, 5, 10, 25], value=1).props("dense").classes("text-xs w-16")
+                                                ui.button("Buy", on_click=lambda _, gk=good_key, qs=qty_select: buy_good(session, gk, int(qs.value or 1))).props("size=sm flat color=green").classes("text-xs")
+                                    else:
+                                        ui.label("No market.").classes("text-xs text-gray-500")
+                                else:
+                                    ui.label("Deep space.").classes("text-xs text-gray-500")
 
-                            ui.separator().classes("q-my-md")
-
-                            # — Market Goods —
-                            if cell_sys and market:
-                                ui.label("🛒 Market — Buy").classes("text-sm font-bold text-amber-300 q-mt-sm q-mb-xs")
-                                for good_key, info in market.items():
-                                    trend_icon = "▲" if info["trend"] == "up" else "▼" if info["trend"] == "down" else "→"
-                                    trend_color = "text-red-400" if info["trend"] == "up" else "text-green-400" if info["trend"] == "down" else "text-gray-400"
-                                    illegal_text = "⚠️ Illegal" if info["illegal"] else ""
-                                    with ui.row().classes("w-full items-center gap-1 text-sm py-1 border-b border-gray-700"):
-                                        with ui.column().classes("flex-1 min-w-0"):
-                                            with ui.row().classes("items-center gap-1"):
-                                                ui.label(f"{info['name']}").classes("text-gray-200")
-                                                ui.label(illegal_text).classes("text-red-500 text-xs")
-                                            ui.label(f"Base {info['base_price']}cr  ·  {info['category']}").classes("text-gray-500 text-xs")
-                                        with ui.column().classes("items-end"):
-                                            with ui.row().classes("items-center gap-1"):
-                                                ui.label(f"{info['price']}cr").classes(trend_color)
-                                                ui.label(trend_icon).classes(trend_color)
-                                            qty_select = ui.select([1, 5, 10, 25, 50, 100], value=1, label="Qty").props("dense options-dense").classes("text-sm w-20")
-                                            ui.button("Buy", on_click=lambda _, gk=good_key, qs=qty_select: _do_buy(session, gk, qs)).props("size=sm flat color=green")
-                            elif cell_sys:
-                                ui.label("No market available.").classes("text-sm text-gray-500")
-                            else:
-                                ui.label("No market in deep space.").classes("text-sm text-gray-500 q-pa-md")
+                            # ── Sell Column ──
+                            with ui.column().classes("flex-1 min-w-0"):
+                                ui.label("📦 Sell").classes("text-sm font-bold text-cyan-300 q-mb-xs")
+                                if ship and ship.cargo_hold:
+                                    for item in ship.cargo_hold:
+                                        current_price = 0
+                                        cell_local = game.galaxy.get_cell(ship.position)
+                                        if cell_local and cell_local.system:
+                                            mkt = game.economy.market_summary(cell_local.system)
+                                            if item.good_key in mkt:
+                                                current_price = mkt[item.good_key]["price"]
+                                        profit = (current_price - item.purchase_price) * item.quantity
+                                        profit_color = "text-green-400" if profit >= 0 else "text-red-400"
+                                        profit_sign = "+" if profit >= 0 else ""
+                                        with ui.row().classes("w-full items-center gap-1 text-xs py-0.5 border-b border-gray-800"):
+                                            with ui.column().classes("flex-1 min-w-0"):
+                                                with ui.row().classes("items-center gap-1"):
+                                                    ui.label(f"{item.good.name}").classes("text-gray-200 text-xs")
+                                                    ui.label(f"x{item.quantity}").classes("text-gray-500 text-[10px]")
+                                                ui.label(f"{current_price}cr | {profit_sign}{profit}cr").classes(f"{profit_color} text-xs")
+                                            qty_sel = ui.select([1, 5, 10, "all"], value=1).props("dense").classes("text-xs w-16")
+                                            ui.button("Sell", on_click=lambda _, gk=item.good_key, qs=qty_sel: sell_good(session, gk, qs.value)).props("size=sm flat color=orange").classes("text-xs")
+                                else:
+                                    ui.label("Empty cargo.").classes("text-xs text-gray-500")
                     # ── Intel Tab ──────────────────────────────────────
                     with ui.tab_panel(intel_tab):
                         # NPC Roster
@@ -710,9 +955,6 @@ async def build_game_ui(session: GameSession):
                 else:
                     ui.label("No ship data.").classes("text-sm text-gray-500 q-pa-md")
 
-    # Always push fresh hex data so it's ready when Nav is shown
-    update_canvas(session)
-
 
 def update_canvas(session: GameSession):
     """Update the hex map canvas via JavaScript."""
@@ -822,239 +1064,43 @@ async def handle_keyboard(e, session: GameSession):
         await process_turn(session)
 
 
-# ── Buy / Sell helpers (called via lambda to avoid closure traps) ──
-
-async def _do_buy(session: GameSession, good_key: str, qty_select):
-    """Buy a quantity of a good. qty_select is the NiceGUI select element."""
-    val = qty_select.value
-    qty = int(val) if val is not None else 1
-    if qty <= 0:
-        ui.notify("Select a quantity greater than 0", type="warning")
-        return
-    await buy_good(session, good_key, qty)
-
-
-async def _do_sell(session: GameSession, good_key: str, max_qty: int, qty_select):
-    """Sell a quantity of a good. qty_select is the NiceGUI select element."""
-    val = qty_select.value
-    if val == "all":
-        qty = max_qty
-    else:
-        qty = int(val) if val is not None else 1
-    if qty <= 0:
-        ui.notify("Select a quantity greater than 0", type="warning")
-        return
-    if qty > max_qty:
-        qty = max_qty
-    await sell_good(session, good_key, qty)
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Main Page
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @ui.page("/")
 async def index():
-    """Main game page."""
+    """Main game page — uses visibility toggle, never destroys slots."""
     ui.add_head_html("""
         <style>
             body { background: #050510; margin: 0; overflow: hidden; }
             .nicegui-content { padding: 0 !important; }
             .text-sm { font-size: 0.8rem; line-height: 1rem; }
-            .text-2xs { font-size: 0.7rem; line-height: 0.85rem; }
-            /* NiceGUI select dropdown text color fix */
             .q-select .q-field__native, .q-select .q-field__prefix, .q-select .q-field__suffix,
             .q-select .q-field__input { color: #ffffff !important; }
             .q-menu .q-item { color: #ffffff !important; background: #1f2937 !important; }
             .q-menu .q-item.q-item--active { background: #374151 !important; }
             .q-menu { background: #1f2937 !important; border: 1px solid #374151; }
         </style>
-        <script>
-        (function() {
-            // --- Permanent Hex Map Drawing Engine ---
-            function hexMapDraw() {
-                var canvas = document.getElementById('hexcanvas');
-                if (!canvas) return;
-                var dpr = window.devicePixelRatio || 1;
-                var ctx = canvas.getContext('2d');
-                var data = window._hexMapData;
-                if (!data) return;
-
-                var w = canvas.clientWidth;
-                var h = canvas.clientHeight;
-                if (!w || !h || w < 5 || h < 5) {
-                    // Not laid out yet; retry after next paint
-                    requestAnimationFrame(function() {
-                        if (window.hexMapDraw) window.hexMapDraw();
-                    });
-                    return;
-                }
-                canvas.width = w * dpr;
-                canvas.height = h * dpr;
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-                var shipPX = data.shipPX;
-                var shipPY = data.shipPY;
-                var shipQ = data.shipQ;
-                var shipR = data.shipR;
-                var hexSize = data.hexSize;
-                var offsetX = w/2 - shipPX;
-                var offsetY = h/2 - shipPY;
-                data.offsetX = offsetX;
-                data.offsetY = offsetY;
-
-                // Background
-                ctx.fillStyle = '#02020a';
-                ctx.fillRect(0, 0, w, h);
-
-                // Stars
-                ctx.fillStyle = '#ffffff';
-                for (var s = 0; s < 120; s++) {
-                    var sx = (s * 137.5) % w;
-                    var sy = (s * 293.3) % h;
-                    var br = (s % 3 === 0) ? 1.2 : 0.6;
-                    ctx.globalAlpha = (s % 7 === 0) ? 0.8 : 0.3;
-                    ctx.beginPath();
-                    ctx.arc(sx, sy, br, 0, Math.PI*2);
-                    ctx.fill();
-                }
-                ctx.globalAlpha = 1.0;
-
-                var sqrt3 = Math.sqrt(3);
-                var hexW = hexSize * 3/2;
-                var hexH = hexSize * sqrt3;
-                var cols = Math.ceil(w / hexW) + 6;
-                var rows = Math.ceil(h / hexH) + 6;
-                var startQ = Math.floor((shipQ * hexW - w/2) / hexW) - 3;
-                var startR = Math.floor((shipR * sqrt3 * hexSize - h/2) / hexH) - 3;
-
-                // Grid outline
-                ctx.strokeStyle = 'rgba(100,140,180,0.18)';
-                ctx.lineWidth = 0.5;
-                for (var rq = startQ; rq < startQ + cols; rq++) {
-                    for (var rr = startR; rr < startR + rows; rr++) {
-                        var fx = shipPX + (rq - shipQ) * hexW + offsetX;
-                        var fy = shipPY + ((rr - shipR) * hexH + (rq - shipQ) * hexH/2) + offsetY;
-                        if (fx < -hexSize*2 || fx > w + hexSize*2 || fy < -hexSize*2 || fy > h + hexSize*2) continue;
-                        ctx.beginPath();
-                        for (var i = 0; i < 6; i++) {
-                            var angle = Math.PI/180 * (60 * i);
-                            ctx.lineTo(fx + hexSize * Math.cos(angle), fy + hexSize * Math.sin(angle));
-                        }
-                        ctx.closePath();
-                        ctx.stroke();
-                    }
-                }
-
-                // Reachable destinations — amber stroke only
-                var reachIdx = {};
-                ctx.lineWidth = 1.0;
-                ctx.strokeStyle = 'rgba(255, 180, 0, 0.75)';
-                data.travel.forEach(function(t, ti) {
-                    var cx = t.x + offsetX;
-                    var cy = t.y + offsetY;
-                    if (cx < -hexSize*2 || cx > w + hexSize*2 || cy < -hexSize*2 || cy > h + hexSize*2) return;
-                    reachIdx[t.q + ':' + t.r] = ti;
-                    ctx.beginPath();
-                    for (var i = 0; i < 6; i++) {
-                        var angle = Math.PI/180 * (60 * i);
-                        ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));
-                    }
-                    ctx.closePath();
-                    ctx.stroke();
-                });
-                canvas._reachIdx = reachIdx;
-
-                // Visible cells
-                ctx.lineWidth = 0.8;
-                data.cells.forEach(function(c) {
-                    var cx = c.x + offsetX;
-                    var cy = c.y + offsetY;
-                    if (cx < -hexSize*2.5 || cx > w + hexSize*2.5 || cy < -hexSize*2.5 || cy > h + hexSize*2.5) return;
-                    ctx.beginPath();
-                    for (var i = 0; i < 6; i++) {
-                        var angle = Math.PI/180 * (60 * i);
-                        ctx.lineTo(cx + hexSize * Math.cos(angle), cy + hexSize * Math.sin(angle));
-                    }
-                    ctx.closePath();
-                    ctx.fillStyle = c.color;
-                    ctx.fill();
-                    if (c.hazards.indexOf('nebula') !== -1) {
-                        ctx.fillStyle = 'rgba(106,13,173,0.25)';
-                        ctx.fill();
-                    }
-                    if (c.hazards.indexOf('asteroid') !== -1) {
-                        ctx.fillStyle = 'rgba(139,115,85,0.3)';
-                        ctx.fill();
-                        ctx.fillStyle = 'rgba(180,160,130,0.5)';
-                        for (var a = 0; a < 5; a++) ctx.fillRect(cx + (a*53 % 14) - 7, cy + (a*91 % 14) - 7, 1.5, 1.5);
-                    }
-                    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-                    ctx.stroke();
-                    if (c.label) {
-                        ctx.fillStyle = '#ffffff';
-                        ctx.font = (c.isShip ? 'bold ' : '') + '10px sans-serif';
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-                        var name = c.label.length > 12 ? c.label.substring(0,11)+'\u2026' : c.label;
-                        ctx.fillText(name, cx, cy - 2);
-                    }
-                });
-
-                // Ship marker
-                var sx = shipPX + offsetX;
-                var sy = shipPY + offsetY;
-                ctx.beginPath();
-                ctx.moveTo(sx, sy - hexSize*0.45);
-                ctx.lineTo(sx - hexSize*0.35, sy + hexSize*0.3);
-                ctx.lineTo(sx + hexSize*0.35, sy + hexSize*0.3);
-                ctx.closePath();
-                ctx.fillStyle = '#00ff88';
-                ctx.fill();
-                ctx.strokeStyle = '#ccffee';
-                ctx.lineWidth = 1.5;
-                ctx.stroke();
-            }
-            window.hexMapDraw = hexMapDraw;
-
-            // Canvas click handler (delegated, one-time install)
-            document.addEventListener('click', function(ev) {
-                var canvas = document.getElementById('hexcanvas');
-                if (!canvas || ev.target !== canvas) return;
-                var data = window._hexMapData;
-                if (!data || !data.offsetX) return;
-                var rect = canvas.getBoundingClientRect();
-                var lx = ev.clientX - rect.left;
-                var ly = ev.clientY - rect.top;
-                var offsetX = data.offsetX;
-                var offsetY = data.offsetY;
-                var best = null;
-                var bestDist = 999999;
-                for (var ti=0; ti<data.travel.length; ti++) {
-                    var t = data.travel[ti];
-                    var tx = t.x + offsetX;
-                    var ty = t.y + offsetY;
-                    var dx = lx - tx;
-                    var dy = ly - ty;
-                    var dist = Math.sqrt(dx*dx + dy*dy);
-                    if (dist < bestDist) { bestDist = dist; best = t; }
-                }
-                canvas._travelTarget = (best && bestDist < data.hexSize) ? best : null;
-            });
-
-            // Observe tab-panel visibility and redraw when Nav becomes visible
-            // Replaced by NiceGUI tabs.on_value_change callback for reliability
-         })();
-        </script>
     """)
 
-    with ui.element("div").classes("w-full h-screen flex items-center justify-center bg-gray-950") as container:
-        container.props("id=main_container")
-        with ui.card().classes("bg-gray-900 text-white p-8 text-center"):
-            ui.label("🚀").classes("text-6xl mb-4")
-            ui.label("Caravaneer to the Stars").classes("text-3xl font-bold text-amber-400 mb-2")
-            ui.label("A Space Trading & Exploration Game").classes("text-gray-400 mb-6")
-            ui.button("New Game", on_click=create_new_game_dialog).classes("text-lg px-8 py-3").props("color=amber")
+    # ── Both views live here; visibility toggles, never cleared ──
+    with ui.element("div").classes("w-full h-screen bg-gray-950") as root:
+        # Landing page (visible by default)
+        landing = ui.element("div").classes("w-full h-full flex items-center justify-center")
+        with landing:
+            with ui.card().classes("bg-gray-900 text-white p-8 text-center"):
+                ui.label("🚀").classes("text-6xl mb-4")
+                ui.label("Caravaneer to the Stars").classes("text-3xl font-bold text-amber-400 mb-2")
+                ui.label("A Space Trading & Exploration Game").classes("text-gray-400 mb-6")
+                ui.button("New Game", on_click=create_new_game_dialog).classes("text-lg px-8 py-3").props("color=amber")
+
+        # Game UI (hidden until game starts)
+        game_container = ui.element("div").classes("w-full h-full").style("display:none")
+
+        # Store game_container for rebuild_game_ui to use
+        root._game_container = game_container
+        root._landing = landing
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1071,3 +1117,7 @@ def run(host: str = "127.0.0.1", port: int = 8500):
         reload=False,
         show=False,
     )
+
+
+if __name__ == "__main__":
+    run()
